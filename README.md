@@ -82,14 +82,6 @@ Bản MVP hiện dùng analyzer local nhẹ để demo luồng upload -> split c
 
 Schema database và API đã được thiết kế để đổi model mà không phải viết lại dashboard.
 
-## Tạo repo GitHub
+## GitHub
 
-Repo này đã sẵn sàng để push lên account `thangak18`:
-
-```bash
-git init
-git add .
-git commit -m "Initial SafeCam AI Assistant MVP"
-gh repo create thangak18/Camera-AI --private --source=. --remote=origin --push
-```
-
+Repo đã được tạo trên account `thangak18`: [https://github.com/thangak18/Camera-AI](https://github.com/thangak18/Camera-AI).
