@@ -1,0 +1,50 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: safecam-db
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-safecam}
+      POSTGRES_USER: ${POSTGRES_USER:-safecam}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-safecam}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-safecam} -d ${POSTGRES_DB:-safecam}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  api:
+    build:
+      context: ./backend
+    container_name: safecam-api
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-safecam}:${POSTGRES_PASSWORD:-safecam}@db:5432/${POSTGRES_DB:-safecam}
+      MEDIA_ROOT: /app/media
+      CORS_ORIGINS: http://localhost:8080,http://localhost:5173,http://localhost:8000
+      CLIP_SECONDS: ${CLIP_SECONDS:-10}
+      EMBEDDING_DIM: ${EMBEDDING_DIM:-384}
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-512}
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      - media_data:/app/media
+    depends_on:
+      db:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ./frontend
+    container_name: safecam-web
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    depends_on:
+      - api
+
+volumes:
+  db_data:
+  media_data:
+
