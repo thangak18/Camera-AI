@@ -6,8 +6,131 @@ Trợ lý AI tìm kiếm và phân tích sự kiện trong video camera an ninh,
 
 - Backend: FastAPI, SQLAlchemy, FFmpeg, PostgreSQL + pgvector.
 - Frontend: React, Vite, TypeScript.
-- Database: PostgreSQL 16 với extension `vector`.
+- Database mặc định: PostgreSQL 16 local trong Docker với extension `vector`.
 - Deploy local: Docker Compose gồm `db`, `api`, `web`.
+
+## Sơ đồ kiến trúc
+
+```mermaid
+flowchart TB
+    U["Người dùng / Bảo vệ / Quản lý"] --> W["React Dashboard<br/>Upload, hỏi đáp, xem bằng chứng"]
+    W -->|REST API /api| A["FastAPI Backend"]
+    W -->|/media| M["Static media<br/>Video gốc, clip, thumbnail"]
+
+    subgraph Backend["Backend services"]
+        A --> I["Ingest API<br/>Nhận video + metadata camera"]
+        I --> P["Video Processor<br/>FFmpeg tách clip + thumbnail"]
+        P --> FA["Frame Analyzer<br/>Caption, object tags, attributes"]
+        FA --> E["Embedding Service<br/>Vector hóa caption + metadata"]
+        A --> Q["Query Parser<br/>Chuẩn hóa truy vấn tiếng Việt"]
+        Q --> S["Search Service<br/>pgvector cosine search + metadata filter"]
+        S --> R["Report Service<br/>Câu trả lời + lý do + evidence"]
+    end
+
+    subgraph Data["Data layer"]
+        DB[("PostgreSQL + pgvector<br/>cameras, videos, clips, search_logs")]
+        M
+    end
+
+    E --> DB
+    I --> DB
+    S --> DB
+    R --> A
+    A --> W
+```
+
+## Luồng xử lý
+
+```mermaid
+sequenceDiagram
+    participant User as User
+    participant Web as React Web
+    participant API as FastAPI
+    participant FFmpeg as FFmpeg Pipeline
+    participant AI as Analyzer + Embedding
+    participant DB as PostgreSQL pgvector
+
+    User->>Web: Upload video camera
+    Web->>API: POST /api/videos/upload
+    API->>DB: Lưu video metadata
+    API->>FFmpeg: Tách clip + thumbnail
+    FFmpeg->>AI: Gửi frame/metadata để phân tích
+    AI->>DB: Lưu caption, objects, attributes, vector
+    User->>Web: Hỏi "Tìm người áo đen đi vào cổng"
+    Web->>API: POST /api/search
+    API->>DB: Vector search + filter camera/thời gian/vị trí
+    DB-->>API: Top-k clip liên quan
+    API-->>Web: Answer, score, timestamp, thumbnail, clip URL
+```
+
+## Sơ đồ database
+
+```mermaid
+erDiagram
+    CAMERAS ||--o{ VIDEOS : records
+    CAMERAS ||--o{ CLIPS : contains
+    VIDEOS ||--o{ CLIPS : splits_into
+
+    CAMERAS {
+        string id PK
+        string name
+        string location
+        string stream_url
+        text description
+        datetime created_at
+    }
+
+    VIDEOS {
+        string id PK
+        string camera_id FK
+        string original_filename
+        string storage_path
+        float duration_seconds
+        datetime recorded_at
+        string status
+        text error_message
+        datetime created_at
+        datetime processed_at
+    }
+
+    CLIPS {
+        string id PK
+        string video_id FK
+        string camera_id FK
+        float start_second
+        float end_second
+        datetime start_time
+        datetime end_time
+        text caption
+        json objects
+        json attributes
+        string thumbnail_path
+        string clip_path
+        vector embedding
+        float confidence
+    }
+
+    SEARCH_LOGS {
+        string id PK
+        text query
+        text normalized_query
+        int result_count
+        int latency_ms
+        datetime created_at
+    }
+```
+
+## Database local hay Supabase?
+
+Mặc định repo này đang dùng PostgreSQL local trong Docker Compose, service `db` dùng image `pgvector/pgvector:pg16`. Đây chưa phải Supabase.
+
+Supabase cũng là PostgreSQL, nên có thể dùng Supabase thay cho database local nếu project Supabase đã bật extension `vector`. Khi đó chỉ cần set `DATABASE_URL` trong `.env`:
+
+```bash
+DATABASE_URL=postgresql+psycopg://postgres:<password>@<supabase-host>:5432/postgres
+```
+
+Sau đó chạy backend như bình thường. Lưu ý `MEDIA_ROOT` vẫn lưu video/thumbnail/clip ở filesystem hoặc Docker volume; Supabase ở cấu hình này chỉ thay phần PostgreSQL, chưa thay phần lưu file bằng Supabase Storage.
 
 ## Chạy nhanh bằng Docker
 
