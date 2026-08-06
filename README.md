@@ -1,166 +1,119 @@
-# SafeCam AI Assistant
+# AIC 2026 Video Retrieval System
 
-Trợ lý AI tìm kiếm và phân tích sự kiện trong video camera an ninh, được dựng từ ý tưởng trong file `Y_tuong_2_Tro_ly_AI_Camera_An_ninh.pdf`.
+Hệ thống AI tìm kiếm và truy xuất sự kiện trong video, được thiết kế và tối ưu riêng cho cuộc thi **Hội thi Thử thách Trí tuệ Nhân tạo TP.HCM năm 2026 (AIC 2026)**.
 
-## Stack
+## Mục tiêu giải quyết theo đề thi AIC 2026
 
-- Backend: FastAPI, SQLAlchemy, FFmpeg, PostgreSQL + pgvector.
-- Frontend: React, Vite, TypeScript.
-- Database mặc định: PostgreSQL 16 local trong Docker với extension `vector`.
-- Deploy local: Docker Compose gồm `db`, `api`, `web`.
+Hệ thống được thiết kế để giải quyết 3 dạng truy vấn chính của vòng sơ tuyển:
 
-## Sơ đồ kiến trúc
+1. **Truy vấn dạng 1 (Textual KIS)**: Tìm kiếm sự kiện chính xác theo văn bản.
+   - Đầu vào: Mô tả văn bản.
+   - Đầu ra: `video_id`, `frame_id`.
+2. **Truy vấn dạng 2 (Video Q&A)**: Tìm kiếm sự kiện và trả lời câu hỏi.
+   - Đầu vào: Mô tả sự kiện và câu hỏi cụ thể.
+   - Đầu ra: `video_id`, `frame_id`, `answer`.
+3. **Truy vấn dạng 3 (TRAKE)**: Truy xuất và căn chỉnh sự kiện video theo thời gian.
+   - Đầu vào: Chuỗi sự kiện có cấu trúc.
+   - Đầu ra: `video_id` và danh sách các `frame_id` (semantic keyframes) tương ứng.
+
+## Stack Công Nghệ
+
+- **Backend**: FastAPI, SQLAlchemy, FFmpeg.
+- **AI Models**: 
+  - **Vector Search**: Sử dụng trực tiếp CLIP features (clip-ViT-B-32) do BTC cung cấp.
+  - **Vision-Language Model (VLM)**: Xử lý dạng Q&A và hỗ trợ nhận diện chuỗi sự kiện TRAKE.
+- **Frontend**: React, Vite, TypeScript, TailwindCSS.
+- **Database**: PostgreSQL 16 + pgvector (Lưu trữ và query CLIP embeddings, objects, metadata).
+- **Deploy**: Docker Compose.
+
+## Sơ đồ kiến trúc (Theo chuẩn AIC 2026)
 
 ```mermaid
 flowchart TB
-    U["Người dùng / Bảo vệ / Quản lý"] --> W["React Dashboard<br/>Upload, hỏi đáp, xem bằng chứng"]
+    U["Người dùng / Đội thi"] --> W["React Dashboard<br/>Nhập truy vấn KIS, Q&A, TRAKE"]
     W -->|REST API /api| A["FastAPI Backend"]
-    W -->|/media| M["Static media<br/>Video gốc, clip, thumbnail"]
 
-    subgraph Backend["Backend services"]
-        A --> I["Ingest API<br/>Nhận video + metadata camera"]
-        I --> P["Video Processor<br/>FFmpeg tách clip + thumbnail"]
-        P --> FA["Frame Analyzer<br/>Caption, object tags, attributes"]
-        FA --> E["Embedding Service<br/>Vector hóa caption + metadata"]
-        A --> Q["Query Parser<br/>Chuẩn hóa truy vấn tiếng Việt"]
-        Q --> S["Search Service<br/>pgvector cosine search + metadata filter"]
-        S --> R["Report Service<br/>Câu trả lời + lý do + evidence"]
+    subgraph Data_Ingestion["Dữ liệu cung cấp (AIC 2026)"]
+        V["Videos (.mp4)"]
+        K["Keyframes (.jpg)"]
+        O["Objects (Faster R-CNN .json)"]
+        C["CLIP Features (.npy)"]
+        M["Metadata (YouTube .json)"]
     end
 
-    subgraph Data["Data layer"]
-        DB[("PostgreSQL + pgvector<br/>cameras, videos, clips, search_logs")]
-        M
-    end
-
-    E --> DB
+    Data_Ingestion --> I["Data Ingestion Pipeline<br/>Đồng bộ & Chuẩn hóa"]
     I --> DB
-    S --> DB
+    
+    subgraph Backend["Backend & AI Services"]
+        A --> Q["Query Engine<br/>Phân loại & Chuẩn hóa (KIS/Q&A/TRAKE)"]
+        Q --> S["Search Service<br/>pgvector cosine search"]
+        Q --> VLM["VLM Service<br/>Sinh câu trả lời & Căn chỉnh (TRAKE)"]
+        S --> R["Result Formatter<br/>Tính R-Score mô phỏng"]
+        VLM --> R
+    end
+
+    subgraph Data["Database Layer"]
+        DB[("PostgreSQL + pgvector<br/>videos, keyframes, embeddings")]
+    end
+
     R --> A
     A --> W
 ```
 
-## Luồng xử lý
+## Luồng xử lý Truy Vấn
 
 ```mermaid
 sequenceDiagram
     participant User as User
     participant Web as React Web
     participant API as FastAPI
-    participant FFmpeg as FFmpeg Pipeline
-    participant AI as Analyzer + Embedding
-    participant DB as PostgreSQL pgvector
+    participant Search as pgvector DB
+    participant VLM as VLM Engine
 
-    User->>Web: Upload video camera
-    Web->>API: POST /api/videos/upload
-    API->>DB: Lưu video metadata
-    API->>FFmpeg: Tách clip + thumbnail
-    FFmpeg->>AI: Gửi frame/metadata để phân tích
-    AI->>DB: Lưu caption, objects, attributes, vector
-    User->>Web: Hỏi "Tìm người áo đen đi vào cổng"
+    User->>Web: Nhập truy vấn (KIS / Q&A / TRAKE)
     Web->>API: POST /api/search
-    API->>DB: Vector search + filter camera/thời gian/vị trí
-    DB-->>API: Top-k clip liên quan
-    API-->>Web: Answer, score, timestamp, thumbnail, clip URL
+    API->>Search: Vector Search với CLIP features
+    Search-->>API: Top-K Keyframes & Video candidates
+    
+    alt Nếu là Q&A
+        API->>VLM: Đưa Keyframes + Câu hỏi vào VLM
+        VLM-->>API: Trả về Answer
+    else Nếu là TRAKE
+        API->>VLM: Phân tích các phân đoạn video
+        VLM-->>API: Danh sách các semantic keyframes
+    end
+    
+    API-->>Web: Kết quả format chuẩn (video_id, frame_id, answer)
 ```
 
-## Sơ đồ database
+## Database (PostgreSQL + pgvector) hay Supabase?
 
-```mermaid
-erDiagram
-    CAMERAS ||--o{ VIDEOS : records
-    CAMERAS ||--o{ CLIPS : contains
-    VIDEOS ||--o{ CLIPS : splits_into
-
-    CAMERAS {
-        string id PK
-        string name
-        string location
-        string stream_url
-        text description
-        datetime created_at
-    }
-
-    VIDEOS {
-        string id PK
-        string camera_id FK
-        string original_filename
-        string storage_path
-        float duration_seconds
-        datetime recorded_at
-        string status
-        text error_message
-        datetime created_at
-        datetime processed_at
-    }
-
-    CLIPS {
-        string id PK
-        string video_id FK
-        string camera_id FK
-        float start_second
-        float end_second
-        datetime start_time
-        datetime end_time
-        text caption
-        json objects
-        json attributes
-        string thumbnail_path
-        string clip_path
-        vector embedding
-        float confidence
-    }
-
-    SEARCH_LOGS {
-        string id PK
-        text query
-        text normalized_query
-        int result_count
-        int latency_ms
-        datetime created_at
-    }
-```
-
-## Database local hay Supabase?
-
-Mặc định repo này đang dùng PostgreSQL local trong Docker Compose, service `db` dùng image `pgvector/pgvector:pg16`. Đây chưa phải Supabase.
-
-Supabase cũng là PostgreSQL, nên có thể dùng Supabase thay cho database local nếu project Supabase đã bật extension `vector`. Khi đó chỉ cần set `DATABASE_URL` trong `.env`:
+Mặc định repo sử dụng PostgreSQL local trong Docker Compose với extension `pgvector`.
+Có thể chuyển đổi dễ dàng sang Supabase bằng cách thay đổi `DATABASE_URL` trong file `.env`:
 
 ```bash
 DATABASE_URL=postgresql+psycopg://postgres:<password>@<supabase-host>:5432/postgres
 ```
 
-Sau đó chạy backend như bình thường. Lưu ý `MEDIA_ROOT` vẫn lưu video/thumbnail/clip ở filesystem hoặc Docker volume; Supabase ở cấu hình này chỉ thay phần PostgreSQL, chưa thay phần lưu file bằng Supabase Storage.
-
 ## Chạy nhanh bằng Docker
 
 ```bash
 cp .env.example .env
+# Cấu hình các đường dẫn đến dataset của BTC trong .env nếu cần
 docker compose up --build
 ```
 
-Mở dashboard tại [http://localhost:8080](http://localhost:8080).
+- Mở dashboard tại [http://localhost:8080](http://localhost:8080)
+- Kiểm tra API tại [http://localhost:8000/api/health](http://localhost:8000/api/health)
 
-API chạy tại [http://localhost:8000/api/health](http://localhost:8000/api/health).
+## Chạy thủ công từng service
 
-## Cách dùng demo
-
-1. Mở dashboard.
-2. Upload một video camera `.mp4`, `.mov`, `.mkv`, `.avi`, `.webm`.
-3. Chờ trạng thái video chuyển sang `processed`.
-4. Nhập truy vấn như `Tìm người áo đen đi vào cổng chính`.
-5. Bấm một kết quả để xem thumbnail, clip và timestamp.
-
-## Chạy từng thư mục
-
-Chạy database bằng Docker:
-
+### Database:
 ```bash
 docker compose up -d db
 ```
 
-Backend:
-
+### Backend:
 ```bash
 cd backend
 python3 -m venv .venv
@@ -169,41 +122,17 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Frontend:
-
+### Frontend:
 ```bash
 cd frontend
 npm install
 VITE_API_BASE_URL=http://localhost:8000 npm run dev
 ```
 
-Frontend dev server sẽ chạy ở [http://localhost:5173](http://localhost:5173).
+## Ghi chú về Tích hợp Dữ Liệu AIC
 
-## Lệnh tiện ích
-
-```bash
-make docker-up
-make docker-down
-make test-backend
-make build-frontend
-```
-
-## API chính
-
-- `GET /api/health`: kiểm tra API và database.
-- `GET /api/stats`: thống kê camera, video, clip.
-- `GET /api/cameras`: danh sách camera.
-- `POST /api/videos/upload`: upload video, form-data gồm `file`, `camera_id`, `location`, `recorded_at`, `process_now`.
-- `POST /api/videos/{id}/process`: xử lý lại video.
-- `GET /api/clips`: danh sách clip đã phân tích.
-- `POST /api/search`: tìm kiếm bằng câu hỏi tiếng Việt.
-- `POST /api/reports/summary`: tạo báo cáo ngắn từ kết quả truy vấn.
-
-## Ghi chú về AI
-
-Bản MVP hiện dùng analyzer local nhẹ để demo luồng upload -> split clip -> caption -> embedding -> vector search. Muốn nâng độ chính xác, thay `backend/app/services/frame_analyzer.py` bằng YOLO/VLM và thay `HashingEmbedding` trong `backend/app/services/embedding.py` bằng CLIP hoặc sentence-transformers.
-
-Schema database và API đã được thiết kế để đổi model mà không phải viết lại dashboard.
+- Thay vì tự tách frame và trích xuất đặc trưng bằng FFmpeg/Model từ đầu như các hệ thống thông thường, backend sẽ ưu tiên đọc trực tiếp từ các file `.npy` (CLIP features) và `.json` (Objects, Metadata) do BTC cung cấp để tiết kiệm thời gian và đảm bảo độ chính xác khi chấm điểm.
+- API sẽ có luồng riêng để đánh giá (evaluate) theo công thức tính **R-Score** (Top-1, 5, 20, 50, 100) của BTC.
 
 ## GitHub
 
