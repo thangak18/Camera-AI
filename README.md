@@ -1,6 +1,7 @@
 # AIC 2026 Video Retrieval System
 
-Hệ thống AI tìm kiếm và truy xuất sự kiện trong video đa phương thức, được thiết kế và tối ưu riêng cho cuộc thi **Hội thi Thử thách Trí tuệ Nhân tạo TP.HCM năm 2026 (AIC 2026)**.
+Hệ thống AI tìm kiếm và truy xuất sự kiện trong video đa phương thức, được thiết kế và tối ưu riêng cho cuộc thi **Hội thi Thử thách Trí tuệ Nhân tạo TP.HCM năm 2026 (AIC 2026)**. Trái tim của hệ thống sử dụng **Qdrant** Vector Database kết hợp quy trình Re-ranking và VLM tiên tiến.
+
 ---
 
 ## 1. Mục tiêu giải quyết (Theo đề thi AIC 2026)
@@ -8,23 +9,37 @@ Hệ thống AI tìm kiếm và truy xuất sự kiện trong video đa phương
 Hệ thống được thiết kế để giải quyết 3 dạng truy vấn chính của vòng sơ tuyển:
 
 1. **Truy vấn dạng 1 (Textual KIS)**: Tìm kiếm sự kiện chính xác theo văn bản.
-   - Đầu vào: Mô tả văn bản.
+   - Đầu vào: Mô tả văn bản tự nhiên.
    - Đầu ra: `video_id`, `frame_id`.
 2. **Truy vấn dạng 2 (Video Q&A)**: Tìm kiếm sự kiện và trả lời câu hỏi.
    - Đầu vào: Mô tả sự kiện và câu hỏi cụ thể.
    - Đầu ra: `video_id`, `frame_id`, `answer`.
 3. **Truy vấn dạng 3 (TRAKE)**: Truy xuất và căn chỉnh sự kiện video theo thời gian.
-   - Đầu vào: Chuỗi sự kiện có cấu trúc.
-   - Đầu ra: `video_id` và danh sách các `frame_id` (semantic keyframes) tương ứng theo đúng thứ tự thời gian.
+   - Đầu vào: Chuỗi sự kiện có cấu trúc gồm $N$ bước.
+   - Đầu ra: `video_id` và danh sách các `frame_id` (semantic keyframes) tương ứng theo thứ tự thời gian tăng dần (`frame_id_1 < frame_id_2 < ... < frame_id_N`).
 
 ---
 
-## 2. Kiến trúc Hệ thống & Pipeline
+## 2. Công thức Đánh giá & Chấm điểm (Scoring Metric)
 
-Hệ thống hoạt động theo 2 pha: **Offline** (chạy trước khi thi) và **Online** (khi nhập câu hỏi thi).
+BTC chấm điểm tối đa 100 câu trả lời nộp về cho mỗi truy vấn theo tiêu chí:
+- **Điểm Tương Quan ($R\text{-Score}$)**: Đánh giá câu trả lời đúng hay sai (giá trị 0 đến 1).
+  - *Textual KIS*: Đúng `video_id` và `frame_id` nằm trong đoạn $[s, e]$.
+  - *Q&A*: Đúng `video_id`, `frame_id` trong $[s, e]$ và đúng ngữ nghĩa `answer`.
+  - *TRAKE*: Đúng `video_id` (sai là 0 điểm ngay) và tỉ lệ các bước nộp đúng $[s_j, e_j]$.
+- **Điểm Cuối Cùng ($\text{Final Score}$)**: Trung bình cộng $R\text{-Score}$ cao nhất trong Top-$k$ ($k \in \{1, 5, 20, 50, 100\}$):
+  $$\text{Final Score} = \frac{R@1 + R@5 + R@20 + R@50 + R@100}{5}$$
 
-### 2.1. OFFLINE PIPELINE (Data Ingestion & Indexing)
-Nhiệm vụ: Xử lý toàn bộ video/keyframes mà BTC cung cấp và nạp vào Vector Database & Text Database.
+> 💡 **Chiến lược:** Vì $R@1$ và $R@5$ chiếm tỉ trọng điểm rất lớn, hệ thống **bắt buộc phải có khâu Re-ranking** để đẩy câu trả lời chính xác nhất lên vị trí số 1.
+
+---
+
+## 3. Kiến trúc Hệ thống & Pipeline
+
+Hệ thống hoạt động theo 2 pha: **Offline** (chuẩn bị dữ liệu) và **Online** (truy vấn thời gian thực).
+
+### 3.1. OFFLINE PIPELINE (Data Ingestion & Indexing)
+Xử lý toàn bộ video/keyframes mà BTC cung cấp và nạp vào Vector DB & Text Engine.
 
 ```mermaid
 graph TD
@@ -47,8 +62,8 @@ graph TD
     style E fill:#e0ffff,stroke:#333,stroke-width:2px
 ```
 
-### 2.2. ONLINE PIPELINE (Query Processing & Retrieval)
-Nhiệm vụ: Chạy realtime khi người dùng nhập câu hỏi truy vấn. Hệ thống áp dụng Re-ranking khắt khe để đảm bảo đáp án lọt vào Top 1.
+### 3.2. ONLINE PIPELINE (Query Processing & Retrieval)
+Chạy realtime khi người dùng nhập câu hỏi truy vấn, áp dụng Re-ranking khắt khe.
 
 ```mermaid
 graph TD
@@ -77,7 +92,7 @@ graph TD
 
 ---
 
-## 3. Stack Công Nghệ
+## 4. Stack Công Nghệ
 
 - **Vector Database**: **Qdrant** (Thay thế PostgreSQL/pgvector để tăng tốc độ truy xuất hàng triệu vector & hỗ trợ Payload filtering mạnh mẽ).
 - **Text Search**: **Elasticsearch** (Tìm kiếm OCR text, ASR, Metadata).
@@ -90,13 +105,77 @@ graph TD
 
 ---
 
-## 4. Cấu trúc Thư mục Dự án
+## 5. Quy chuẩn API (API Specification)
+
+Backend cung cấp các REST API cho Frontend hoặc Script Submit:
+
+### 5.1. KIS Search
+`POST /api/search/kis`
+```json
+// Request
+{ "query": "Tìm video về một diễn giả mặc áo đỏ phát biểu ngoài trời" }
+
+// Response
+{
+  "results": [
+    { "rank": 1, "video_id": "L01_V001", "frame_id": 1500, "score": 0.92 },
+    { "rank": 2, "video_id": "L01_V002", "frame_id": 820, "score": 0.88 }
+  ]
+}
+```
+
+### 5.2. Q&A Search
+`POST /api/search/qa`
+```json
+// Request
+{
+  "description": "Trong video về lễ trao giải thưởng âm nhạc",
+  "question": "Có bao nhiêu người lên sân khấu nhận giải?"
+}
+
+// Response
+{
+  "results": [
+    { "rank": 1, "video_id": "L05_V005", "frame_id": 3450, "answer": "5", "score": 0.95 }
+  ]
+}
+```
+
+### 5.3. TRAKE Search
+`POST /api/search/trake`
+```json
+// Request
+{
+  "events": [
+    "Vận động viên chạy đà",
+    "Vận động viên giậm nhảy",
+    "Vận động viên bay qua xà",
+    "Vận động viên tiếp đất"
+  ]
+}
+
+// Response
+{
+  "results": [
+    {
+      "rank": 1,
+      "video_id": "L10_V010",
+      "frame_ids": [101, 150, 203, 251],
+      "score": 0.89
+    }
+  ]
+}
+```
+
+---
+
+## 6. Cấu trúc Thư mục Dự án
 
 ```text
 Camera-AI/
 ├── data/
-│   ├── videos/          # Video gốc từ BTC
-│   ├── keyframes/       # Ảnh cắt từ video
+│   ├── videos/          # Video gốc từ BTC (.mp4)
+│   ├── keyframes/       # Ảnh cắt từ video (.jpg)
 │   ├── objects/         # JSON chứa object detected (Faster R-CNN)
 │   ├── clip_features/   # File .npy CLIP ban đầu
 │   └── metadata/        # JSON YouTube
@@ -114,6 +193,7 @@ Camera-AI/
 │   ├── 00_setup.sh      # Script cài đặt môi trường
 │   ├── 01_ingest.py     # Script nạp feature BTC vào Qdrant & Elasticsearch
 │   └── 02_evaluate.py   # Script chấm điểm R-Score nội bộ
+├── download_data.py     # Script tự động tải bộ dữ liệu AIC 2026 từ file Excel
 ├── docker-compose.yml   # File khởi chạy toàn bộ dịch vụ (Qdrant, Backend...)
 ├── requirements.txt
 └── README.md
@@ -121,16 +201,25 @@ Camera-AI/
 
 ---
 
-## 5. Hướng dẫn Cài đặt & Khởi chạy Nhanh
+## 7. Hướng dẫn Cài đặt & Khởi chạy Nhanh
 
-### Bước 1: Khởi chạy Database bằng Docker
-Chúng ta sẽ dùng Docker để chạy Qdrant và (tuỳ chọn) Elasticsearch:
+### Bước 1: Tải bộ dữ liệu AIC 2026
+Chạy script Python để tự động tải bộ dữ liệu (~115GB):
 ```bash
-# Chạy Qdrant Vector DB
+python download_data.py
+```
+
+### Bước 2: Khởi chạy Qdrant DB bằng Docker
+```bash
 docker run -d -p 6333:6333 -p 6334:6334 -v $(pwd)/qdrant_storage:/qdrant/storage qdrant/qdrant
 ```
 
-### Bước 2: Chạy Backend (FastAPI)
+### Bước 3: Nạp dữ liệu vào Qdrant (Ingestion)
+```bash
+python scripts/01_ingest.py
+```
+
+### Bước 4: Chạy Backend (FastAPI)
 Yêu cầu Python 3.10+
 ```bash
 cd backend
@@ -138,12 +227,11 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-# Chạy server
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
-Kiểm tra API tại [http://localhost:8000/docs](http://localhost:8000/docs).
+Kiểm tra Swagger UI tại [http://localhost:8000/docs](http://localhost:8000/docs).
 
-### Bước 3: Chạy Frontend (React)
+### Bước 5: Chạy Frontend (React)
 ```bash
 cd frontend
 npm install
@@ -153,11 +241,13 @@ Truy cập UI tại [http://localhost:5173](http://localhost:5173).
 
 ---
 
-## 6. Lộ trình Triển khai (Checklist)
+## 8. Lộ trình Triển khai (Checklist)
 
-- [ ] **Data Ingestion**: Hoàn thành script `01_ingest.py` nạp thành công 100% dữ liệu `clip_features`, `objects` của BTC vào Qdrant.
-- [ ] **Base Search**: Hoàn thiện API `/api/search/kis` chạy trơn tru, trả về top-100 `video_id`, `frame_id`.
-- [ ] **Re-ranking**: Tích hợp module BLIP-2 chấm điểm lại, cải thiện R@1.
-- [ ] **VLM cho Q&A**: Gọi API mô hình ngôn ngữ lớn để trả lời task 2.
-- [ ] **TRAKE Solver**: Cài đặt logic Dynamic Programming (DP) ràng buộc thời gian tăng dần cho task 3.
-- [ ] **Evaluation**: Kiểm thử và so sánh R-Score tự động.
+- [x] **Kế hoạch & Architecture**: Chọn Qdrant, thiết kế Online/Offline pipeline và Re-ranking strategy.
+- [x] **Data Downloader**: Viết script `download_data.py` tự động đọc file Excel và tải bộ dữ liệu Batch 1.
+- [ ] **Data Ingestion**: Nạp toàn bộ dữ liệu CLIP features & Object labels của BTC vào Qdrant.
+- [ ] **Base Search API**: Hoàn thiện API `/api/search/kis` trả kết quả search cơ bản từ Qdrant.
+- [ ] **Re-ranking Engine**: Tích hợp BLIP-2 Cross-Encoder đẩy Top-1 R-Score.
+- [ ] **VLM Module**: Gọi Qwen2-VL / Gemini API cho câu hỏi Q&A.
+- [ ] **TRAKE DP Solver**: Thuật toán ràng buộc chuỗi thời gian tăng dần cho TRAKE.
+- [ ] **Evaluation Script**: Tính điểm $R\text{-Score}$ và $\text{Final Score}$ tự động.
