@@ -1,10 +1,13 @@
 import os
+from pathlib import Path
+
 import pandas as pd
 import requests
 from tqdm import tqdm
 
-EXCEL_PATH = r"C:\Users\ADMIN\OneDrive\Documents\Documents\AI\Thi cuộc thi\AI Challenge\Camera-AI\Dữ liệu cho vòng Sơ Tuyển AIC 2026.xlsx"
-DATA_DIR = r"C:\Users\ADMIN\OneDrive\Documents\Documents\AI\Thi cuộc thi\AI Challenge\data"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+EXCEL_PATH = REPO_ROOT / "docs" / "v1" / "Dữ liệu cho vòng Sơ Tuyển AIC 2026.xlsx"
+DATA_DIR = REPO_ROOT / "data" / "v1"
 
 def download_file(url, target_path):
     head_res = requests.head(url, timeout=30)

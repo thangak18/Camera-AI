@@ -172,41 +172,44 @@ Backend cung cấp các REST API cho Frontend hoặc Script Submit:
 ## 6. Cấu trúc Thư mục Dự án
 
 ```text
-Camera-AI/
-├── data/
-│   ├── videos/          # Video gốc từ BTC (.mp4)
-│   ├── keyframes/       # Ảnh cắt từ video (.jpg)
-│   ├── objects/         # JSON chứa object detected (Faster R-CNN)
-│   ├── clip_features/   # File .npy CLIP ban đầu
-│   └── metadata/        # JSON YouTube
-├── backend/
-│   ├── main.py          # FastAPI application (Endpoints)
-│   ├── config.py        # Cấu hình Qdrant, Model path, API Keys
-│   ├── qdrant_db.py     # Module kết nối và thao tác Qdrant
-│   ├── retriever.py     # Module tìm kiếm thô (Dense, Sparse, Hybrid)
-│   ├── reranker.py      # Module Cross-encoder chấm điểm lại
-│   ├── qa_generator.py  # VLM sinh câu trả lời cho Q&A
-│   └── trake_solver.py  # Thuật toán Quy hoạch động xử lý TRAKE
-├── frontend/            
-│   └── src/             # Source code React (UI tìm kiếm)
+AIC26-multimodal-video-retrieval/
+├── src/                  # Code lõi pipeline (ingestion, retrieval, reranking, vlm, trake, api)
 ├── scripts/
-│   ├── 00_setup.sh      # Script cài đặt môi trường
-│   ├── 01_ingest.py     # Script nạp feature BTC vào Qdrant & Elasticsearch
-│   └── 02_evaluate.py   # Script chấm điểm R-Score nội bộ
-├── download_data.py     # Script tự động tải bộ dữ liệu AIC 2026 từ file Excel
-├── docker-compose.yml   # File khởi chạy toàn bộ dịch vụ (Qdrant, Backend...)
-├── requirements.txt
+│   └── download_data.py # Script tự động tải bộ dữ liệu AIC 2026 từ file Excel BTC cấp
+├── data/
+│   └── v1/
+│       ├── videos/          # Video gốc từ BTC (.mp4)
+│       ├── keyframes/       # Ảnh cắt từ video (.jpg)
+│       ├── objects/         # JSON chứa object detected (Faster R-CNN)
+│       ├── clip_features/   # File .npy CLIP ban đầu
+│       └── metadata/        # JSON YouTube
+├── notebooks/
+│   └── v1/               # Notebook thử nghiệm, hướng dẫn truy vấn dữ liệu bằng FiftyOne
+├── outputs/
+│   └── v1/
+│       ├── submissions/  # CSV kết quả nộp bài
+│       └── eval/         # Kết quả chấm R-Score nội bộ
+├── docs/
+│   ├── src-overview.md   # Mô tả vai trò từng module trong src/
+│   ├── v1/                # Đề bài và manifest dữ liệu của vòng hiện tại
+│   └── papers/             # Paper tham khảo cho video retrieval/reranking
 └── README.md
 ```
+
+Thư mục `data/`, `outputs/` chứa dữ liệu/kết quả sinh ra, không commit vào git. Mỗi vòng thi mới sẽ có thư mục con riêng (`v2/`, `v3/`...) cạnh `v1/` trong `data/`, `notebooks/`, `outputs/`, `docs/`, trong khi `src/` dùng chung và tiến hoá liên tục qua các vòng.
 
 ---
 
 ## 7. Hướng dẫn Cài đặt & Khởi chạy Nhanh
 
 ### Bước 1: Tải bộ dữ liệu AIC 2026
-Chạy script Python để tự động tải bộ dữ liệu (~115GB):
+Cài dependency và chạy script Python để tự động tải bộ dữ liệu (~115GB):
 ```bash
-python download_data.py
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+python scripts/download_data.py
 ```
 
 ### Bước 2: Khởi chạy Qdrant DB bằng Docker
@@ -218,18 +221,13 @@ docker run -d -p 6333:6333 -p 6334:6334 -v $(pwd)/qdrant_storage:/qdrant/storage
 ```bash
 python scripts/01_ingest.py
 ```
+> Chưa triển khai — xem checklist ở mục 8.
 
 ### Bước 4: Chạy Backend (FastAPI)
-Yêu cầu Python 3.10+
 ```bash
-cd backend
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
+uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8000
 ```
-Kiểm tra Swagger UI tại [http://localhost:8000/docs](http://localhost:8000/docs).
+> Chưa triển khai — xem checklist ở mục 8. Kiểm tra Swagger UI tại [http://localhost:8000/docs](http://localhost:8000/docs) khi đã có.
 
 ### Bước 5: Chạy Frontend (React)
 ```bash
@@ -237,7 +235,7 @@ cd frontend
 npm install
 VITE_API_BASE_URL=http://localhost:8000 npm run dev
 ```
-Truy cập UI tại [http://localhost:5173](http://localhost:5173).
+> Thư mục `frontend/` chưa được dựng lại sau khi tái cấu trúc — xem checklist ở mục 8.
 
 ---
 
