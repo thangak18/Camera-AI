@@ -19,3 +19,12 @@ backend/media/
 frontend/dist/
 
 *.log
+
+# AIC dataset cache and generated outputs — never commit, folders kept via .gitkeep
+data/**
+!data/**/
+!data/**/.gitkeep
+
+outputs/**
+!outputs/**/
+!outputs/**/.gitkeep
