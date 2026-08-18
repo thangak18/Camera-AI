@@ -10,6 +10,7 @@ KEYFRAMES_DIR = DATA_DIR / "keyframes"
 CLIP_FEATURES_DIR = DATA_DIR / "clip_features"
 OBJECTS_DIR = DATA_DIR / "objects"
 METADATA_DIR = DATA_DIR / "metadata"
+MAP_KEYFRAMES_DIR = DATA_DIR / "map_keyframes"
 
 # ==========================================
 # Cấu hình Qdrant (Vector Database)
