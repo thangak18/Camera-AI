@@ -1,0 +1,90 @@
+.query-panel {
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.panel-header h3 {
+  font-size: 1.125rem;
+  margin-bottom: 0.25rem;
+}
+
+.panel-header p {
+  font-size: 0.875rem;
+}
+
+.query-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.query-textarea {
+  resize: vertical;
+  min-height: 80px;
+}
+
+.events-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.event-input-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.event-number {
+  color: #64748b;
+  font-size: 0.875rem;
+  font-weight: 500;
+  width: 20px;
+}
+
+.btn-icon {
+  background: transparent;
+  border: none;
+  color: #94a3b8;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn-icon:hover {
+  background: #f1f5f9;
+  color: #475569;
+}
+
+.btn-icon.danger:hover {
+  color: var(--danger-color);
+  background: #fef2f2;
+}
+
+.add-event-btn {
+  align-self: flex-start;
+  margin-left: 32px;
+}
+
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.loading-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid #e2e8f0;
+  border-radius: 50%;
+  border-top-color: white;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
