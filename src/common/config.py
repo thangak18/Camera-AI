@@ -41,7 +41,6 @@ QDRANT_API_KEY = os.getenv(
 # Giữ lại HOST/PORT cho trường hợp dev local (nếu cần override bằng env var)
 QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
 QDRANT_PORT = int(os.getenv("QDRANT_PORT", 6333))
-
 # Tên collection Uyên đã tạo trong step3_siglip_qdrant_indexer.py
 QDRANT_COLLECTION_NAME = os.getenv("QDRANT_COLLECTION", "aichallenge")
 

@@ -19,6 +19,8 @@ from src.common.config import (
     NAMESPACE,
     QDRANT_HOST,
     QDRANT_PORT,
+    QDRANT_URL,
+    QDRANT_API_KEY,
     QDRANT_TIMEOUT,
     QDRANT_COLLECTION_NAME,
     VECTOR_SIZE,
@@ -40,7 +42,10 @@ INDEXED_PAYLOAD_FIELDS = ("video_id", "batch")
 
 def init_qdrant_collection() -> QdrantClient:
     """Kết nối đến Qdrant, tạo collection và payload index nếu chưa có."""
-    client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT, timeout=QDRANT_TIMEOUT)
+    if QDRANT_URL and QDRANT_API_KEY:
+        client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY, timeout=QDRANT_TIMEOUT)
+    else:
+        client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT, timeout=QDRANT_TIMEOUT)
 
     if client.collection_exists(QDRANT_COLLECTION_NAME):
         logger.info("Collection '%s' already exists.", QDRANT_COLLECTION_NAME)
