@@ -40,4 +40,5 @@ class QAResponse(BaseModel):
 # ==========================================
 class TrakeResponse(BaseModel):
     video_id: str
-    frame_ids: List[str]  # N frame_ids sắp xếp theo thời gian tăng dần
+    frame_ids: List[str]  # Chứa N frame_ids được sắp xếp theo thời gian
+    score: float
