@@ -21,6 +21,11 @@ OBJECTS_DIR = DATA_DIR / "objects"
 METADATA_DIR = DATA_DIR / "metadata"
 MAP_KEYFRAMES_DIR = DATA_DIR / "map_keyframes"
 
+# SigLIP features do module reranking sinh ra (không phải BTC cấp).
+# Batch 1: 873 video / 177,321 keyframe / 409 MB, sinh bằng
+# `python -m src.reranking.precompute`. KHÔNG commit lên git.
+SIGLIP_FEATURES_DIR = DATA_DIR / "siglip_features"
+
 # ==========================================
 # Cấu hình Qdrant (Vector Database)
 # ==========================================
@@ -33,8 +38,83 @@ VECTOR_SIZE = 512  # Kích thước vector của model CLIP ViT-B/32
 # rồi văng ReadTimeout dù server vẫn đang xử lý bình thường.
 QDRANT_TIMEOUT = int(os.getenv("QDRANT_TIMEOUT", 120))
 
+# Collection SigLIP - CHƯA DÙNG, đang chờ team quyết (xem mục 2 HANDOVER.md).
+# Vector 1152 chiều nên phải tạo collection MỚI, không sửa được `aic_frames`.
+# Lý do cân nhắc: rerank không bao giờ nâng được R@100 (đo được 0.75 dù có hay
+# không có rerank) vì nó chỉ sắp xếp lại thứ đã lọt Top-100. Muốn tăng recall
+# phải đổi embedding ở tầng retrieval.
+QDRANT_SIGLIP_COLLECTION_NAME = "aic_frames_siglip"
+SIGLIP_VECTOR_SIZE = 1152
+
 # ==========================================
 # Cấu hình Elasticsearch (Text Database)
 # ==========================================
 ES_HOST = os.getenv("ES_HOST", "http://localhost:9200")
 ES_INDEX_NAME = "aic_metadata_objects"
+
+# ==========================================
+# Cấu hình Model (Reranking - Uyên)
+# ==========================================
+# BẮT BUỘC đúng model BTC dùng để trích .npy, sai model là lệch không gian vector.
+CLIP_MODEL_ID = os.getenv("AIC_CLIP_MODEL", "clip-ViT-B-32")
+
+SIGLIP_MODEL_ID = os.getenv("AIC_SIGLIP_MODEL", "google/siglip2-so400m-patch14-384")
+
+# "auto" | "cuda" | "cpu". Sau khi precompute xong, rerank chỉ còn encode 1 câu
+# text + dot product numpy nên chạy CPU vẫn kịp ngân sách.
+DEVICE = os.getenv("AIC_DEVICE", "auto")
+
+# Tỉ lệ candidate tối thiểu phải có SigLIP features. Dưới ngưỡng này thì
+# rerank giữ nguyên thứ tự gốc - rerank trên dữ liệu thiếu còn hại hơn không rerank.
+RERANK_MIN_COVERAGE = float(os.getenv("AIC_RERANK_MIN_COVERAGE", 0.5))
+
+
+def resolve_device() -> str:
+    """Trả về device thực tế sẽ dùng ('cuda' hoặc 'cpu')."""
+    if DEVICE != "auto":
+        return DEVICE
+    import torch
+
+    return "cuda" if torch.cuda.is_available() else "cpu"
+
+
+# ==========================================
+# Cấu hình VLM / Gemini (Q&A - Uyên)
+# ==========================================
+# Free tier tính quota theo từng project -> mỗi thành viên 1 key = n× hạn mức.
+# Đặt qua biến môi trường hoặc Colab Secrets.
+GEMINI_KEY_ENV_NAMES = ["GEMINI_API_KEY"] + [f"GEMINI_KEY_{i}" for i in range(2, 11)]
+
+# Google deprecate model liên tục (đã dính 404 giữa lúc phát triển). Đây là thứ
+# tự ưu tiên, hỏng thì nhảy sang cái kế. Chạy `vlm.client.probe_models()` lúc
+# khởi động API để dò cái nào còn sống.
+GEMINI_MODELS = [
+    "models/gemini-3.5-flash-lite",
+    "models/gemini-3.1-flash-lite",
+    "models/gemini-flash-lite-latest",
+]
+
+# ==========================================
+# Ngân sách thời gian (giây)
+# ==========================================
+# BTC yêu cầu: Dạng 1 & 3 < 3s, Dạng 2 < 10s.
+# Đo được trên T4: Dạng 1 = 33ms, Dạng 2 = 8041ms.
+VLM_CALL_TIMEOUT = float(os.getenv("AIC_VLM_TIMEOUT", 10.0))
+
+# Trần tuyệt đối cho answer_qa. Để dưới 10s và chừa chỗ cho retrieval + rerank.
+QA_DEADLINE = float(os.getenv("AIC_QA_DEADLINE", 8.0))
+
+# Giới hạn burst để né rate limit 429.
+QA_MAX_WORKERS = int(os.getenv("AIC_QA_WORKERS", 3))
+
+# Số nhóm video được hỏi VLM thật. Đã tune trên devset: 5 cho 4 answer khác
+# nhau; 10 thì chạm deadline và mọi dòng ăn cùng một fallback (tệ hơn).
+QA_N_VLM_CALLS = int(os.getenv("AIC_QA_N_CALLS", 5))
+
+# Số keyframe lân cận mỗi bên gửi kèm cho VLM. 0 = chỉ 1 ảnh; đo được ngang
+# 3 ảnh về độ chính xác (90%) nhưng nhanh và ít timeout hơn.
+QA_K_NEIGHBORS = int(os.getenv("AIC_QA_K_NEIGHBORS", 0))
+
+# Số dòng bắt buộc mỗi truy vấn. Luôn nộp đủ, kể cả khi không chắc -
+# dòng 51-100 vẫn ăn điểm R@100.
+SUBMISSION_ROWS = 100
