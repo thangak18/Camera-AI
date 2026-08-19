@@ -6,45 +6,54 @@ import os
 # Ensure we can import from src
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../"))
 from src.common.schemas import SearchResult, QAResponse, TrakeResponse
-from src.trake import RetrievalFn, solve_trake
+from src.trake.solver import solve_trake
+from src.TextualKIS.searcher import TextualKISSearcher
+
+# Khởi tạo searcher 1 lần (Global Singleton) để không tạo lại connection Qdrant/ES liên tục
+_searcher = None
+
+def get_searcher() -> TextualKISSearcher:
+    global _searcher
+    if _searcher is None:
+        _searcher = TextualKISSearcher()
+    return _searcher
 
 def perform_kis_search(query: str, top_k: int) -> List[SearchResult]:
     """
-    Mock orchestration for Textual KIS search.
-    In reality, this would call Retrieval -> Reranking.
+    Textual KIS search using Hybrid Search (Qdrant + ES RRF)
     """
-    # Mock data
-    results = []
-    for i in range(top_k):
-        results.append(
-            SearchResult(video_id=f"L{i:02d}_V001", frame_id=f"{1000+i}", score=max(0.0, 1.0 - (0.01 * i)))
-        )
-    return results
+    searcher = get_searcher()
+    response = searcher.search(query, top_k=top_k)
+    return response.results
 
 def perform_qa_search(question: str, top_k: int) -> List[QAResponse]:
     """
     Mock orchestration for Q&A search.
-    In reality, this would call Retrieval -> Reranking -> VLM.
+    Step 1: Retrieve top frames based on the question using KIS.
+    Step 2: (Mocked) VLM logic to answer the question based on frames.
     """
+    searcher = get_searcher()
+    kis_response = searcher.search(question, top_k=top_k)
+    
     results = []
-    for i in range(top_k):
+    for result in kis_response.results:
         results.append(
-            QAResponse(video_id=f"L{i:02d}_V001", frame_id=f"{1000+i}", answer=f"Mock answer {i}")
+            QAResponse(
+                video_id=result.video_id,
+                frame_id=result.frame_id, 
+                answer=f"[TODO: Uyên cần thay Code gọi VLM (Gemini) vào đây] Answer for {result.video_id}_{result.frame_id}"
+            )
         )
     return results
 
-def retrieve_trake_candidates(query: str, top_k: int) -> Iterable[dict[str, object]]:
-    """Return Retrieval candidates for one TRAKE event.
-
-    TODO: replace this adapter body with Gia Phuoc's KIS/Retrieval callable.
-    The callable must return ``video_id``, ``frame_id`` and ``score`` fields.
-    """
-    return []
-
+def retrieve_trake_candidates(query: str, top_k: int) -> Iterable[SearchResult]:
+    """Return Retrieval candidates for one TRAKE event."""
+    searcher = get_searcher()
+    response = searcher.search(query, top_k=top_k)
+    return response.results
 
 def perform_trake_search(
     event_queries: List[str],
-    retrieval_fn: RetrievalFn = retrieve_trake_candidates,
     top_k: int = 100,
     candidates_per_event: int = 100,
 ) -> List[TrakeResponse]:
@@ -53,7 +62,7 @@ def perform_trake_search(
     """
     results = solve_trake(
         event_queries,
-        retrieval_fn,
+        retrieve_trake_candidates,
         top_k=top_k,
         candidates_per_event=candidates_per_event,
     )
