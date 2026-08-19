@@ -1,3 +1,4 @@
+from collections.abc import Iterable
 from typing import List
 import sys
 import os
@@ -5,6 +6,7 @@ import os
 # Ensure we can import from src
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../"))
 from src.common.schemas import SearchResult, QAResponse, TrakeResponse
+from src.trake import RetrievalFn, solve_trake
 
 def perform_kis_search(query: str, top_k: int) -> List[SearchResult]:
     """
@@ -31,16 +33,28 @@ def perform_qa_search(question: str, top_k: int) -> List[QAResponse]:
         )
     return results
 
-def perform_trake_search(event_queries: List[str]) -> List[TrakeResponse]:
+def retrieve_trake_candidates(query: str, top_k: int) -> Iterable[dict[str, object]]:
+    """Return Retrieval candidates for one TRAKE event.
+
+    TODO: replace this adapter body with Gia Phuoc's KIS/Retrieval callable.
+    The callable must return ``video_id``, ``frame_id`` and ``score`` fields.
     """
-    Mock orchestration for TRAKE search.
-    In reality, this would call Retrieval -> Temporal Alignment.
+    return []
+
+
+def perform_trake_search(
+    event_queries: List[str],
+    retrieval_fn: RetrievalFn = retrieve_trake_candidates,
+    top_k: int = 100,
+    candidates_per_event: int = 100,
+) -> List[TrakeResponse]:
     """
-    results = []
-    # top_k for trake is usually also 100 max per file, let's mock 100 rows
-    for i in range(100):
-        frame_ids = [str(1000 + i*10 + j) for j in range(len(event_queries))]
-        results.append(
-            TrakeResponse(video_id=f"L{i:02d}_V001", frame_ids=frame_ids)
-        )
-    return results
+    Run TRAKE temporal alignment using an injected Retrieval callable.
+    """
+    results = solve_trake(
+        event_queries,
+        retrieval_fn,
+        top_k=top_k,
+        candidates_per_event=candidates_per_event,
+    )
+    return [TrakeResponse(**result.__dict__) for result in results]
