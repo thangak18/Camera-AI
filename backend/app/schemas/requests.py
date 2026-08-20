@@ -6,6 +6,7 @@ class KisRequest(BaseModel):
     top_k: int = 100
 
 class QaRequest(BaseModel):
+    description: str = ""
     question: str
     top_k: int = 100
 

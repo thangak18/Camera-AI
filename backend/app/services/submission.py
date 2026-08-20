@@ -1,6 +1,7 @@
 import csv
 from typing import List, Any
 import os
+from src.common.frame_utils import to_real_frame_idx
 
 def export_to_csv(results: List[Any], filepath: str, task_type: str = "kis"):
     """
@@ -17,12 +18,15 @@ def export_to_csv(results: List[Any], filepath: str, task_type: str = "kis"):
         for result in results[:100]:
             if task_type == "kis":
                 # KIS format: video_id, frame_id
-                writer.writerow([result.video_id, result.frame_id])
+                real_frame = to_real_frame_idx(result.video_id, result.frame_id)
+                writer.writerow([result.video_id, real_frame])
             elif task_type == "qa":
                 # QA format: video_id, frame_id, answer
-                writer.writerow([result.video_id, result.frame_id, result.answer])
+                real_frame = to_real_frame_idx(result.video_id, result.frame_id)
+                writer.writerow([result.video_id, real_frame, result.answer])
             elif task_type == "trake":
                 # Trake format: video_id, frame_id_1, ..., frame_id_N
-                row = [result.video_id] + result.frame_ids
+                real_frames = [to_real_frame_idx(result.video_id, f) for f in result.frame_ids]
+                row = [result.video_id] + real_frames
                 writer.writerow(row)
 

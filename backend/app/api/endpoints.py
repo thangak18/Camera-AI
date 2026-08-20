@@ -18,7 +18,7 @@ def search_kis(request: KisRequest):
 
 @router.post("/qa", response_model=List[QAResponse])
 def search_qa(request: QaRequest):
-    return perform_qa_search(request.question, request.top_k)
+    return perform_qa_search(request.description, request.question, request.top_k)
 
 @router.post("/trake", response_model=List[TrakeResponse])
 def search_trake(request: TrakeRequest):

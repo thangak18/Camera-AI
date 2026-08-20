@@ -8,6 +8,8 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../../../"))
 from src.common.schemas import SearchResult, QAResponse, TrakeResponse
 from src.trake.solver import solve_trake
 from src.TextualKIS.searcher import TextualKISSearcher
+from src.reranking import rerank
+from src.vlm import answer_qa
 
 # Khởi tạo searcher 1 lần (Global Singleton) để không tạo lại connection Qdrant/ES liên tục
 _searcher = None
@@ -20,31 +22,26 @@ def get_searcher() -> TextualKISSearcher:
 
 def perform_kis_search(query: str, top_k: int) -> List[SearchResult]:
     """
-    Textual KIS search using Hybrid Search (Qdrant + ES RRF)
+    Textual KIS search using Hybrid Search (Qdrant + ES RRF) and SigLIP Reranking
     """
     searcher = get_searcher()
     response = searcher.search(query, top_k=top_k)
-    return response.results
+    ranked = rerank(response.query_en, response.results, top_k=top_k)
+    return [SearchResult(**c) for c in ranked]
 
-def perform_qa_search(question: str, top_k: int) -> List[QAResponse]:
+def perform_qa_search(description: str, question: str, top_k: int) -> List[QAResponse]:
     """
-    Mock orchestration for Q&A search.
-    Step 1: Retrieve top frames based on the question using KIS.
-    Step 2: (Mocked) VLM logic to answer the question based on frames.
+    Q&A Search.
+    Step 1: Retrieve top frames based on description (or question if empty).
+    Step 2: VLM logic (Gemini) to answer the question based on frames.
     """
     searcher = get_searcher()
-    kis_response = searcher.search(question, top_k=top_k)
+    desc = description if description else question
+    kis_response = searcher.search(desc, top_k=top_k)
+    ranked = rerank(kis_response.query_en, kis_response.results, top_k=top_k)
     
-    results = []
-    for result in kis_response.results:
-        results.append(
-            QAResponse(
-                video_id=result.video_id,
-                frame_id=result.frame_id, 
-                answer=f"[TODO: Uyên cần thay Code gọi VLM (Gemini) vào đây] Answer for {result.video_id}_{result.frame_id}"
-            )
-        )
-    return results
+    qa_results = answer_qa(question, ranked, top_k=top_k)
+    return [QAResponse(**r) for r in qa_results]
 
 def retrieve_trake_candidates(query: str, top_k: int) -> Iterable[SearchResult]:
     """Return Retrieval candidates for one TRAKE event."""
