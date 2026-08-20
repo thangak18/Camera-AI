@@ -14,21 +14,27 @@ function App() {
     try {
       let endpoint = '';
       let body = {};
+      
+      // Update this URL whenever Kaggle restarts and gives a new Localtunnel link
+      const API_BASE_URL = "https://neat-parts-fall.loca.lt";
 
       if (activeTab === 'kis') {
-        endpoint = 'http://localhost:8000/search/kis';
+        endpoint = `${API_BASE_URL}/search/kis`;
         body = { query: payload, top_k: 20 };
       } else if (activeTab === 'qa') {
-        endpoint = 'http://localhost:8000/search/qa';
-        body = { question: payload, top_k: 20 };
+        endpoint = `${API_BASE_URL}/search/qa`;
+        body = { description: payload.description || '', question: payload.question || '', top_k: 20 };
       } else if (activeTab === 'trake') {
-        endpoint = 'http://localhost:8000/search/trake';
+        endpoint = `${API_BASE_URL}/search/trake`;
         body = { event_queries: payload };
       }
 
       const response = await fetch(endpoint, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Bypass-Tunnel-Reminder': 'true' // Required by localtunnel to bypass warning screen
+        },
         body: JSON.stringify(body),
       });
 

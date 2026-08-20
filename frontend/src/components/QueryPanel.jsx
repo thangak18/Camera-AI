@@ -4,6 +4,8 @@ import './QueryPanel.css';
 
 const QueryPanel = ({ activeTab, onSearch, isLoading }) => {
   const [query, setQuery] = useState('');
+  const [qaDescription, setQaDescription] = useState('');
+  const [qaQuestion, setQaQuestion] = useState('');
   const [events, setEvents] = useState(['', '']);
 
   const handleSearch = (e) => {
@@ -11,6 +13,10 @@ const QueryPanel = ({ activeTab, onSearch, isLoading }) => {
     if (activeTab === 'trake') {
       const validEvents = events.filter(e => e.trim());
       if (validEvents.length > 0) onSearch(validEvents);
+    } else if (activeTab === 'qa') {
+      if (qaQuestion.trim() || qaDescription.trim()) {
+        onSearch({ description: qaDescription, question: qaQuestion });
+      }
     } else {
       if (query.trim()) onSearch(query);
     }
@@ -69,11 +75,28 @@ const QueryPanel = ({ activeTab, onSearch, isLoading }) => {
               <Plus size={16} /> Add Event
             </button>
           </div>
+        ) : activeTab === 'qa' ? (
+          <div className="single-input-group" style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            <textarea
+              className="input-field query-textarea"
+              placeholder="Mô tả bối cảnh (dùng để tìm video, VD: một người đang chạy xe đạp)"
+              value={qaDescription}
+              onChange={(e) => setQaDescription(e.target.value)}
+              rows={2}
+            />
+            <textarea
+              className="input-field query-textarea"
+              placeholder="Câu hỏi chi tiết (dành cho AI trả lời, VD: chiếc xe màu gì?)"
+              value={qaQuestion}
+              onChange={(e) => setQaQuestion(e.target.value)}
+              rows={2}
+            />
+          </div>
         ) : (
           <div className="single-input-group">
             <textarea
               className="input-field query-textarea"
-              placeholder={activeTab === 'kis' ? "e.g., 'A person wearing a red shirt riding a bicycle'" : "e.g., 'What color is the car?'"}
+              placeholder="e.g., 'A person wearing a red shirt riding a bicycle'"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               rows={3}
