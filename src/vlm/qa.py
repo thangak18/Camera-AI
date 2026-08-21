@@ -46,9 +46,17 @@ Trả lời câu hỏi dựa CHỈ trên những gì nhìn thấy được.
 Câu hỏi: {question}
 
 Chỉ trả về JSON, không giải thích, không markdown:
-{{"answer": "<ngắn nhất có thể, 1-5 từ, KHÔNG kèm đơn vị thừa>", "confidence": <0.0-1.0>}}
+{{"answer": "<ngắn gọn nhất có thể nhưng ĐỦ Ý, tối đa 100 ký tự, KHÔNG kèm đơn vị thừa>", "confidence": <0.0-1.0>}}
+
+Nếu câu hỏi yêu cầu chép lại chữ hiện trên màn hình (câu thơ, tên riêng, tiêu đề,
+biển hiệu...), hãy chép NGUYÊN VĂN đúng như nhìn thấy, không tóm tắt, không diễn giải.
 
 Nếu không nhìn thấy thông tin để trả lời, đặt answer = "khong ro"."""
+
+# Trần 100 ký tự là đúng thể lệ (generate_submission cũng cắt ở 100). Bản cũ ép
+# "1-5 từ" là ràng buộc nhóm tự đặt, chặt hơn thể lệ rất nhiều: gặp câu hỏi cần
+# đáp án dài (query-p1-19 hỏi HAI CÂU THƠ ~14 từ) thì VLM không thể vừa tuân
+# lệnh vừa trả lời, nên nó chọn "khong ro" -> cả 100 dòng mất trắng.
 
 VLM_BACKEND: Callable[..., str] = call_gemini
 """Backend đang dùng. Đổi sang Qwen2-VL local nếu Gemini chết đêm thi:

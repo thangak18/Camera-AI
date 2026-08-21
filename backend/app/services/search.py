@@ -7,6 +7,7 @@ import os
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../"))
 from src.common.schemas import SearchResult, QAResponse, TrakeResponse
 from src.trake.solver import solve_trake
+from src.common.frame_utils import all_frame_idx
 from src.TextualKIS.searcher import TextualKISSearcher
 from src.reranking import rerank
 from src.vlm import answer_qa
@@ -52,7 +53,15 @@ def retrieve_trake_candidates(query: str, top_k: int) -> Iterable[SearchResult]:
 def perform_trake_search(
     event_queries: List[str],
     top_k: int = 100,
-    candidates_per_event: int = 100,
+    # 200 chứ không 100: đo trên đề thử nghiệm, nâng lên 200 cho query-p1-4
+    # từ 74 -> 100 dòng và kéo tỉ lệ sự kiện phải nội suy của query-p1-18 từ
+    # 71% xuống 63%. Top-1 KHÔNG đổi ở cả 3 file, nên đây là lợi ích ở phần
+    # đuôi danh sách chứ không phải phỏng đoán tốt hơn.
+    #
+    # 200 là trần miễn phí: searcher lấy oversample = min(QDRANT_OVERSAMPLE=200,
+    # top_k*2) nên xin nhiều hơn 200 cũng chỉ nhận 200. Muốn vượt phải nâng
+    # QDRANT_OVERSAMPLE, việc đó ảnh hưởng cả KIS lẫn QA nên để riêng.
+    candidates_per_event: int = 200,
 ) -> List[TrakeResponse]:
     """
     Run TRAKE temporal alignment using an injected Retrieval callable.
@@ -62,5 +71,10 @@ def perform_trake_search(
         retrieve_trake_candidates,
         top_k=top_k,
         candidates_per_event=candidates_per_event,
+        # BẮT BUỘC truyền: sự kiện nào không có candidate trong video thì solver
+        # phải nội suy bằng một keyframe CÓ THẬT của video đó. Không có hàm này,
+        # nó chỉ được chọn trong số frame đã thấy ở candidate — thường < N frame
+        # nên video bị loại sạch, TRAKE lại trả rỗng như bản cũ.
+        keyframes_fn=all_frame_idx,
     )
     return [TrakeResponse(**result.__dict__) for result in results]
