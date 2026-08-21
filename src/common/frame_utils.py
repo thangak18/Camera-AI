@@ -52,17 +52,7 @@ def to_real_frame_idx(video_id: str, frame_id: str | int) -> int:
         Frame index thật. Nếu không tra được, trả về `int(frame_id)` và ghi
         cảnh báo — thà nộp số sai còn hơn văng lỗi mất cả truy vấn.
     """
-    if video_id not in _map_cache:
-        csv_path = MAP_KEYFRAMES_DIR / f"{video_id}.csv"
-        try:
-            import pandas as pd
-
-            df = pd.read_csv(csv_path)
-            _map_cache[video_id] = dict(zip(df["n"].astype(int),
-                                            df["frame_idx"].astype(int)))
-        except Exception as exc:
-            logger.warning("Không đọc được %s: %s", csv_path, exc)
-            _map_cache[video_id] = {}
+    _load_map(video_id)
 
     n = int(frame_id)
     if (real := _map_cache[video_id].get(n)) is not None:
@@ -70,3 +60,36 @@ def to_real_frame_idx(video_id: str, frame_id: str | int) -> int:
 
     logger.warning("Không tra được frame_idx cho %s/%s", video_id, frame_id)
     return n
+
+
+def _load_map(video_id: str) -> dict[int, int]:
+    """Bảng n -> frame_idx của một video, cache theo tiến trình.
+
+    Dùng module `csv` chứ không pandas: TRAKE tra tới vài trăm video mỗi truy
+    vấn (ngân sách BTC cho Dạng 3 là 3s), pandas nặng hơn hẳn cho file ~200
+    dòng mà không được lợi gì.
+    """
+    if video_id in _map_cache:
+        return _map_cache[video_id]
+
+    import csv
+
+    csv_path = MAP_KEYFRAMES_DIR / f"{video_id}.csv"
+    try:
+        with open(csv_path, newline="", encoding="utf-8") as fh:
+            _map_cache[video_id] = {int(r["n"]): int(r["frame_idx"])
+                                    for r in csv.DictReader(fh)}
+    except Exception as exc:
+        logger.warning("Không đọc được %s: %s", csv_path, exc)
+        _map_cache[video_id] = {}
+    return _map_cache[video_id]
+
+
+def all_frame_idx(video_id: str) -> list[int]:
+    """Toàn bộ frame_idx hợp lệ của một video, tăng dần.
+
+    TRAKE dùng để nội suy sự kiện không có candidate: mọi frame nộp lên BẮT
+    BUỘC là keyframe có thật trong map_keyframes, nếu không thì BTC so khớp số
+    nguyên không ra và mất điểm cả dòng.
+    """
+    return sorted(set(_load_map(video_id).values()))
