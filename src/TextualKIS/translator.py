@@ -82,16 +82,26 @@ def translate_vi_to_en(text_vi: str) -> str:
     # --- Phương án 1: Gemini API (primary — tốt nhất) ---
     if _GEMINI_OK:
         try:
-            # Dùng call_gemini thay vì tự gọi SDK với model hardcode: nó đã có
-            # sẵn probe_models() lúc khởi động + fallback lần lượt qua
-            # GEMINI_MODELS + timeout. Bản cũ ghim "gemini-2.5-flash" nên khi
-            # Google gỡ model đó, MỌI truy vấn đều 404 rồi tụt xuống Google
-            # Translate free — mất prompt giữ thuật ngữ văn hoá Việt ("áo dài
-            # (traditional Vietnamese long dress)"), query_en kém hẳn.
-            from src.vlm.client import call_gemini
+            # CỐ Ý giữ model hardcode ở đây, KHÔNG chuyển sang call_gemini():
+            # call_gemini xài chung GEMINI_MODELS và chung quota với Dạng 2
+            # (Q&A). Đã thử đổi và trả giá — mỗi lượt sinh submission,
+            # translator tốn thêm ~18 call cho KIS + ~12 cho TRAKE trong khi
+            # Q&A chỉ cần ~15, mà translator lại chạy TRƯỚC. Quota cạn, Q&A
+            # dính 429: query-p1-22 rơi từ 90 dòng có đáp án thật xuống 100%
+            # "khong ro", tổng điểm 6.0 -> 5.4.
+            #
+            # Dịch hỏng thì deep_translator ngay dưới gánh được; Q&A hỏng là mất
+            # trắng cả truy vấn (điểm nhân 3: video ∧ frame ∧ answer). Quota
+            # Gemini phải để DÀNH RIÊNG cho Q&A.
+            from google import genai as _genai  # type: ignore
 
+            client = _genai.Client(api_key=os.getenv("GEMINI_API_KEY", ""))
             prompt = _GEMINI_TRANSLATE_PROMPT.format(text_vi=text_vi)
-            result = call_gemini(prompt).strip()
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt,
+            )
+            result = response.text.strip()
             if result:
                 logger.debug("Gemini translate: '%s' → '%s'", text_vi[:60], result[:60])
                 return result

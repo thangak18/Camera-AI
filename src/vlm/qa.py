@@ -46,17 +46,19 @@ Trả lời câu hỏi dựa CHỈ trên những gì nhìn thấy được.
 Câu hỏi: {question}
 
 Chỉ trả về JSON, không giải thích, không markdown:
-{{"answer": "<ngắn gọn nhất có thể nhưng ĐỦ Ý, tối đa 100 ký tự, KHÔNG kèm đơn vị thừa>", "confidence": <0.0-1.0>}}
+{{"answer": "<1-5 từ, KHÔNG kèm đơn vị thừa>", "confidence": <0.0-1.0>}}
 
-Nếu câu hỏi yêu cầu chép lại chữ hiện trên màn hình (câu thơ, tên riêng, tiêu đề,
-biển hiệu...), hãy chép NGUYÊN VĂN đúng như nhìn thấy, không tóm tắt, không diễn giải.
+NGOẠI LỆ: nếu câu hỏi yêu cầu chép lại đúng chữ đang hiện trên màn hình (câu thơ,
+tên riêng, tiêu đề, biển hiệu...), hãy chép NGUYÊN VĂN, dài bao nhiêu cũng được
+miễn không quá 100 ký tự — đừng rút xuống 1-5 từ, đừng tóm tắt.
 
 Nếu không nhìn thấy thông tin để trả lời, đặt answer = "khong ro"."""
 
-# Trần 100 ký tự là đúng thể lệ (generate_submission cũng cắt ở 100). Bản cũ ép
-# "1-5 từ" là ràng buộc nhóm tự đặt, chặt hơn thể lệ rất nhiều: gặp câu hỏi cần
-# đáp án dài (query-p1-19 hỏi HAI CÂU THƠ ~14 từ) thì VLM không thể vừa tuân
-# lệnh vừa trả lời, nên nó chọn "khong ro" -> cả 100 dòng mất trắng.
+# Giữ mặc định "1-5 từ" đúng như bản đạt 6.0 điểm (chính nó sinh ra "Hòa Thạnh",
+# "nhân bánh cuốn") và chỉ mở NGOẠI LỆ có điều kiện. Bỏ trần ngắn cho mọi câu là
+# rủi ro: thể lệ chấm answer bằng so khớp ngữ nghĩa chính xác, câu trả lời dài
+# dòng dễ trượt hơn. Ngoại lệ này nhắm đúng query-p1-19 (hỏi HAI CÂU THƠ ~14 từ,
+# không cách nào vừa tuân "1-5 từ" vừa trả lời được -> VLM chọn "khong ro").
 
 VLM_BACKEND: Callable[..., str] = call_gemini
 """Backend đang dùng. Đổi sang Qwen2-VL local nếu Gemini chết đêm thi:
