@@ -82,14 +82,16 @@ def translate_vi_to_en(text_vi: str) -> str:
     # --- Phương án 1: Gemini API (primary — tốt nhất) ---
     if _GEMINI_OK:
         try:
-            from google import genai as _genai  # type: ignore
-            client = _genai.Client(api_key=os.getenv("GEMINI_API_KEY", ""))
+            # Dùng call_gemini thay vì tự gọi SDK với model hardcode: nó đã có
+            # sẵn probe_models() lúc khởi động + fallback lần lượt qua
+            # GEMINI_MODELS + timeout. Bản cũ ghim "gemini-2.5-flash" nên khi
+            # Google gỡ model đó, MỌI truy vấn đều 404 rồi tụt xuống Google
+            # Translate free — mất prompt giữ thuật ngữ văn hoá Việt ("áo dài
+            # (traditional Vietnamese long dress)"), query_en kém hẳn.
+            from src.vlm.client import call_gemini
+
             prompt = _GEMINI_TRANSLATE_PROMPT.format(text_vi=text_vi)
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt,
-            )
-            result = response.text.strip()
+            result = call_gemini(prompt).strip()
             if result:
                 logger.debug("Gemini translate: '%s' → '%s'", text_vi[:60], result[:60])
                 return result
