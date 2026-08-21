@@ -16,6 +16,10 @@ class SearchResult(BaseModel):
     # 96.5% ra None, 3.5% còn lại lấy NHẦM vector/ảnh của keyframe khác mà
     # không hề báo lỗi (frame_idx nhỏ vô tình trùng chỉ số n).
     n: Optional[int] = None
+    # Mốc thời gian (giây) của keyframe trong video. Dùng để lọc frame gần trùng
+    # nhau: 24% cặp keyframe liên tiếp của BTC cách nhau <1s (bùng nổ tại ranh
+    # giới cảnh) nên top-100 rất dễ bị một cảnh duy nhất chiếm gần hết chỗ.
+    pts_time: Optional[float] = None
 
 # ==========================================
 # Định dạng (Schema) cho Dạng 1: Textual KIS
