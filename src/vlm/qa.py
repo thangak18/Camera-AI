@@ -46,19 +46,9 @@ Trả lời câu hỏi dựa CHỈ trên những gì nhìn thấy được.
 Câu hỏi: {question}
 
 Chỉ trả về JSON, không giải thích, không markdown:
-{{"answer": "<1-5 từ, KHÔNG kèm đơn vị thừa>", "confidence": <0.0-1.0>}}
-
-NGOẠI LỆ: nếu câu hỏi yêu cầu chép lại đúng chữ đang hiện trên màn hình (câu thơ,
-tên riêng, tiêu đề, biển hiệu...), hãy chép NGUYÊN VĂN, dài bao nhiêu cũng được
-miễn không quá 100 ký tự — đừng rút xuống 1-5 từ, đừng tóm tắt.
+{{"answer": "<ngắn nhất có thể, 1-5 từ, KHÔNG kèm đơn vị thừa>", "confidence": <0.0-1.0>}}
 
 Nếu không nhìn thấy thông tin để trả lời, đặt answer = "khong ro"."""
-
-# Giữ mặc định "1-5 từ" đúng như bản đạt 6.0 điểm (chính nó sinh ra "Hòa Thạnh",
-# "nhân bánh cuốn") và chỉ mở NGOẠI LỆ có điều kiện. Bỏ trần ngắn cho mọi câu là
-# rủi ro: thể lệ chấm answer bằng so khớp ngữ nghĩa chính xác, câu trả lời dài
-# dòng dễ trượt hơn. Ngoại lệ này nhắm đúng query-p1-19 (hỏi HAI CÂU THƠ ~14 từ,
-# không cách nào vừa tuân "1-5 từ" vừa trả lời được -> VLM chọn "khong ro").
 
 VLM_BACKEND: Callable[..., str] = call_gemini
 """Backend đang dùng. Đổi sang Qwen2-VL local nếu Gemini chết đêm thi:

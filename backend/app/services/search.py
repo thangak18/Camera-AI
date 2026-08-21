@@ -53,15 +53,11 @@ def retrieve_trake_candidates(query: str, top_k: int) -> Iterable[SearchResult]:
 def perform_trake_search(
     event_queries: List[str],
     top_k: int = 100,
-    # 200 chứ không 100: đo trên đề thử nghiệm, nâng lên 200 cho query-p1-4
-    # từ 74 -> 100 dòng và kéo tỉ lệ sự kiện phải nội suy của query-p1-18 từ
-    # 71% xuống 63%. Top-1 KHÔNG đổi ở cả 3 file, nên đây là lợi ích ở phần
-    # đuôi danh sách chứ không phải phỏng đoán tốt hơn.
-    #
-    # 200 là trần miễn phí: searcher lấy oversample = min(QDRANT_OVERSAMPLE=200,
-    # top_k*2) nên xin nhiều hơn 200 cũng chỉ nhận 200. Muốn vượt phải nâng
-    # QDRANT_OVERSAMPLE, việc đó ảnh hưởng cả KIS lẫn QA nên để riêng.
-    candidates_per_event: int = 200,
+    # Giữ 100 như bản đạt 6.0. Nâng lên 200 có làm query-p1-4 dài thêm 26 dòng
+    # và giảm tỉ lệ nội suy, nhưng KHÔNG đổi top-1 ở cả 3 file - tức chỉ béo
+    # phần đuôi danh sách, chưa có bằng chứng ăn điểm. Đổi cùng lúc nhiều thứ
+    # là mất khả năng quy trách nhiệm cho từng thay đổi; đã trả giá một lần rồi.
+    candidates_per_event: int = 100,
 ) -> List[TrakeResponse]:
     """
     Run TRAKE temporal alignment using an injected Retrieval callable.
