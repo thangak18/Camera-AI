@@ -176,7 +176,7 @@ def generate_submission(query_dir: str, api_url: str):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Tool tạo file ZIP nộp bài thi AIC 2026")
     parser.add_argument("--query_dir", type=str, required=True, help="Thư mục chứa các file .txt của BTC")
-    parser.add_argument("--url", type=str, default="https://neat-parts-fall.loca.lt", help="URL của API Backend (Kaggle)")
+    parser.add_argument("--url", type=str, default="https://curvy-cows-smile.loca.lt", help="URL của API Backend (Kaggle)")
     args = parser.parse_args()
     
     generate_submission(args.query_dir, args.url)
