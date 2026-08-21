@@ -66,7 +66,11 @@ def process_and_write_results(q_type: str, query_data, api_url: str, output_csv:
                 
             res = requests.post(
                 f"{api_url}/search/qa", 
-                json={"description": description, "question": question, "top_k": 100},
+                # Chạy offline, không ai bấm giờ -> hỏi VLM nhiều nhóm video hơn
+                # hẳn mặc định 5. 40 nhóm phủ gần hết (query nhiều nhóm nhất trên
+                # đề thử nghiệm có 61), deadline 300s đủ chỗ cho 40 lượt gọi.
+                json={"description": description, "question": question, "top_k": 100,
+                      "n_vlm_calls": 40, "deadline": 300.0},
                 headers=headers
             )
             res.raise_for_status()
@@ -76,14 +80,19 @@ def process_and_write_results(q_type: str, query_data, api_url: str, output_csv:
             # Trake thường là danh sách sự kiện
             event_queries = []
             if isinstance(query_data, str):
-                # Chỉ lấy dòng khớp "E<số>:" làm event, bỏ tiền tố trước khi gửi
-                # search. Một số file mẫu có 1 dòng mô tả chung ở đầu trước khi
-                # liệt kê E1..EN - split theo mọi dòng không rỗng sẽ đếm luôn
-                # dòng đó thành 1 event thừa, lệch số lượng frame_id yêu cầu.
+                # MỖI DÒNG KHÔNG RỖNG LÀ MỘT EVENT - kể cả dòng mở đầu không có
+                # nhãn "E<số>". Log chấm của BTC ở đợt 1 báo query-p1-16-trake
+                # "Expected 4 frame IDs, got 3": file đề có 4 dòng (1 dòng mô tả
+                # cảnh mở đầu + E1..E3), BTC đếm đủ 4. Lọc theo nhãn E<số> sẽ
+                # thiếu đúng 1 cột -> cả file bị loại khỏi vòng chấm.
+                # Nhãn có thể có ":" (đề thử nghiệm) hoặc không (đợt 1) - bỏ
+                # tiền tố đi trước khi đưa vào search, giữ nguyên phần mô tả.
                 for line in query_data.split('\n'):
-                    m = re.match(r'^E\d+:\s*(.*)', line.strip())
-                    if m:
-                        event_queries.append(m.group(1).strip())
+                    line = line.strip()
+                    if not line:
+                        continue
+                    m = re.match(r'^E\d+\s*[:.)-]?\s+(.*)', line)
+                    event_queries.append(m.group(1).strip() if m else line)
             else:
                 event_queries = query_data.get("event_queries", [])
                 
@@ -212,7 +221,7 @@ def generate_submission(query_dir: str, api_url: str):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Tool tạo file ZIP nộp bài thi AIC 2026")
     parser.add_argument("--query_dir", type=str, required=True, help="Thư mục chứa các file .txt của BTC")
-    parser.add_argument("--url", type=str, default="https://sour-bobcats-shine.loca.lt/", help="URL của API Backend (Kaggle)")
+    parser.add_argument("--url", type=str, default="https://small-lines-sip.loca.lt/", help="URL của API Backend (Kaggle)")
     args = parser.parse_args()
     
     generate_submission(args.query_dir, args.url)

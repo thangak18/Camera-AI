@@ -16,7 +16,7 @@ function App() {
       let body = {};
       
       // Update this URL whenever Kaggle restarts and gives a new Localtunnel link
-      const API_BASE_URL = "https://sour-bobcats-shine.loca.lt/";
+      const API_BASE_URL = "https://small-lines-sip.loca.lt/";
 
       if (activeTab === 'kis') {
         endpoint = `${API_BASE_URL}/search/kis`;
