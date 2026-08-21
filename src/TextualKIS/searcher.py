@@ -19,7 +19,10 @@ logger = logging.getLogger(__name__)
 
 
 DEFAULT_TOP_K = 100         
-QDRANT_OVERSAMPLE = 200      
+# Nới từ 200: tầng KIS lọc bỏ các frame gần trùng rồi mới cắt còn 100, nên cần
+# dư ứng viên để lấp chỗ trống bằng VIDEO KHÁC. Không ảnh hưởng QA/TRAKE vì hai
+# đường đó vẫn gọi search() với top_k=100 -> oversample = min(1000, 200) = 200.
+QDRANT_OVERSAMPLE = 1000      
 RRF_K = 60                   
 _qdrant_client: Optional[QdrantClient] = None
 
@@ -150,6 +153,7 @@ class TextualKISSearcher:
                     frame_id=str(hit_map[uid].payload.get("frame_id", "")),
                     score=round(hit_map[uid].score, 6),
                     n=hit_map[uid].payload.get("n"),
+                    pts_time=hit_map[uid].payload.get("pts_time"),
                 )
                 for uid in final_ids
                 if uid in hit_map
@@ -162,6 +166,7 @@ class TextualKISSearcher:
                     frame_id=str((hit.payload or {}).get("frame_id", "")),
                     score=round(hit.score, 6),
                     n=(hit.payload or {}).get("n"),
+                    pts_time=(hit.payload or {}).get("pts_time"),
                 )
                 for hit in qdrant_hits[:top_k]
             ]
