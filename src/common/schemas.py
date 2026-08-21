@@ -7,8 +7,15 @@ from typing import List, Optional
 # ==========================================
 class SearchResult(BaseModel):
     video_id: str
-    frame_id: str
+    frame_id: str   # frame_idx THẬT của video (khớp map_keyframes) — giá trị nộp bài
     score: float
+    # Số thứ tự keyframe 1..N trong map_keyframes/<video_id>.csv.
+    # BẮT BUỘC mang xuống hạ nguồn: ảnh keyframe (`001.jpg`) và vector trong
+    # siglip_features/*.npy đều đánh theo `n`, KHÔNG theo frame_id. Thiếu nó thì
+    # reranker và QA phải suy ngược từ frame_id — đo trên 2000 keyframe thật:
+    # 96.5% ra None, 3.5% còn lại lấy NHẦM vector/ảnh của keyframe khác mà
+    # không hề báo lỗi (frame_idx nhỏ vô tình trùng chỉ số n).
+    n: Optional[int] = None
 
 # ==========================================
 # Định dạng (Schema) cho Dạng 1: Textual KIS

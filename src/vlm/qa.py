@@ -65,19 +65,28 @@ def _as_dict(item: Any) -> dict:
     if hasattr(item, "model_dump"):
         return item.model_dump()
     return {"video_id": item.video_id, "frame_id": item.frame_id,
-            "score": getattr(item, "score", 0.0)}
+            "score": getattr(item, "score", 0.0),
+            "n": getattr(item, "n", None)}
 
 
-def load_neighbors(video_id: str, frame_id: str, k: int = 0,
+def load_neighbors(video_id: str, n: Any, k: int = 0,
                    KEYFRAMES_DIR: Path = KEYFRAMES_DIR) -> list[Image.Image]:
-    """Ảnh keyframe kèm k khung lân cận mỗi bên, theo thứ tự thời gian.
+    """Ảnh keyframe thứ `n` kèm k khung lân cận mỗi bên, theo thứ tự thời gian.
 
     k=0 → chỉ 1 ảnh (mặc định; đo được ngang 3 ảnh về độ chính xác nhưng
     nhanh và ít timeout hơn).
+
+    Nhận `n` (số thứ tự keyframe 1..N) chứ KHÔNG phải `frame_id`: ảnh trên đĩa
+    đặt tên theo n (`001.jpg`), còn frame_id là frame_idx thật của video. Bản cũ
+    truyền frame_id vào đây nên 96.5% trường hợp không mở được ảnh nào → VLM
+    không có gì để nhìn → mọi dòng rơi về DEFAULT_ANSWER "khong ro" → Dạng 2
+    mất trắng (điểm QA nhân 3 điều kiện video ∧ frame ∧ answer).
     """
+    if n is None:
+        return []
     imgs = []
     for off in range(-k, k + 1):
-        p = keyframe_path(video_id, int(frame_id) + off, KEYFRAMES_DIR)
+        p = keyframe_path(video_id, int(n) + off, KEYFRAMES_DIR)
         if p.exists():
             try:
                 imgs.append(Image.open(p).convert("RGB"))
@@ -86,10 +95,10 @@ def load_neighbors(video_id: str, frame_id: str, k: int = 0,
     return imgs
 
 
-def ask_one(question_vi: str, video_id: str, frame_id: str,
+def ask_one(question_vi: str, video_id: str, n: Any,
             k_neighbors: int = 0) -> tuple[str, float]:
-    """Hỏi VLM về một keyframe. Lỗi → (DEFAULT_ANSWER, 0.0)."""
-    imgs = load_neighbors(video_id, frame_id, k_neighbors)
+    """Hỏi VLM về keyframe thứ `n`. Lỗi → (DEFAULT_ANSWER, 0.0)."""
+    imgs = load_neighbors(video_id, n, k_neighbors)
     if not imgs:
         return DEFAULT_ANSWER, 0.0
     return parse_answer(VLM_BACKEND(PROMPT_QA.format(question=question_vi), images=imgs))
@@ -135,7 +144,7 @@ def answer_qa(question_vi: str, candidates: Sequence[Any],
 
     ex = cf.ThreadPoolExecutor(max_workers=max_workers)
     try:
-        futs = {ex.submit(ask_one, question_vi, vid, cs[0]["frame_id"], k_neighbors): vid
+        futs = {ex.submit(ask_one, question_vi, vid, cs[0].get("n"), k_neighbors): vid
                 for vid, cs in targets}
         done, _ = cf.wait(futs, timeout=deadline_s)
         for f in done:

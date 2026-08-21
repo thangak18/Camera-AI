@@ -45,7 +45,8 @@ def _as_dict(item: Any) -> dict:
     if hasattr(item, "model_dump"):
         return item.model_dump()
     return {"video_id": item.video_id, "frame_id": item.frame_id,
-            "score": getattr(item, "score", 0.0)}
+            "score": getattr(item, "score", 0.0),
+            "n": getattr(item, "n", None)}
 
 
 def _extract_embedding(out: Any):
@@ -94,7 +95,6 @@ class SigLIPReranker:
         self._proc = None
         self._device: str | None = None
         self._feats: dict[str, np.ndarray] = {}
-        self._order: dict[str, list[str]] = {}
 
     # ── nạp tài nguyên ───────────────────────────────────────────────
     def _ensure_model(self) -> None:
@@ -124,26 +124,26 @@ class SigLIPReranker:
 
         try:
             self._feats[video_id] = np.load(path).astype(np.float32)
-            self._order[video_id] = sorted(
-                p.stem for p in (self.KEYFRAMES_DIR / video_id).glob("*.jpg"))
         except Exception as exc:
             logger.warning("Không đọc được %s: %s", path, exc)
             self._feats[video_id] = None
         return self._feats[video_id]
 
-    def _row_of(self, video_id: str, frame_id: str) -> np.ndarray | None:
-        """Vector SigLIP của một keyframe, hoặc None nếu không có."""
+    def _row_of(self, video_id: str, n: Any) -> np.ndarray | None:
+        """Vector SigLIP của keyframe thứ `n` (1-indexed), hoặc None.
+
+        Chỉ tra theo `n`. TUYỆT ĐỐI không suy ngược từ `frame_id`: frame_id là
+        frame_idx thật của video (vd 26877) còn .npy chỉ có ~300 dòng đánh theo
+        n. Bản cũ đoán `feats[int(frame_id) - 1]` — đo trên 2000 keyframe thật:
+        96.5% ra None (rerank tụt dưới min_coverage rồi lặng lẽ thành no-op) và
+        3.5% còn lại lấy NHẦM vector của keyframe khác, không log, không raise.
+        """
         feats = self._features_for(video_id)
-        if feats is None:
+        if feats is None or n is None:
             return None
 
-        order = self._order.get(video_id, [])
-        try:
-            return feats[order.index(frame_id)]
-        except (ValueError, IndexError):
-            # Không có file ảnh tương ứng → suy ra từ quy ước 1-indexed
-            i = int(frame_id) - 1
-            return feats[i] if 0 <= i < len(feats) else None
+        i = int(n) - 1
+        return feats[i] if 0 <= i < len(feats) else None
 
     # ── API chính ────────────────────────────────────────────────────
     def encode_text(self, query_en: str) -> np.ndarray:
@@ -185,7 +185,7 @@ class SigLIPReranker:
             return []
 
         try:
-            rows = [self._row_of(c["video_id"], c["frame_id"]) for c in items]
+            rows = [self._row_of(c["video_id"], c.get("n")) for c in items]
             coverage = sum(r is not None for r in rows) / len(rows)
             if coverage < self.min_coverage:
                 logger.warning("coverage %.0f%% < %.0f%% → giữ thứ tự gốc",
