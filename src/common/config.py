@@ -41,11 +41,16 @@ QDRANT_API_KEY = os.getenv(
 # Giữ lại HOST/PORT cho trường hợp dev local (nếu cần override bằng env var)
 QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
 QDRANT_PORT = int(os.getenv("QDRANT_PORT", 6333))
-# Tên collection Uyên đã tạo trong step3_siglip_qdrant_indexer.py
-QDRANT_COLLECTION_NAME = os.getenv("QDRANT_COLLECTION", "aichallenge")
+# "aichallenge" (script nạp gốc "step3_siglip_qdrant_indexer.py" đã mất khỏi
+# repo, dùng lưới keyframe không khớp map_keyframes chính thức, gây submit ra
+# 0 điểm) đã được thay bằng "aic_frames_siglip" - nạp lại đúng theo spec.md
+# bằng src/ingestion/qdrant_loader.py, đã verify khớp map_keyframes 100%.
+QDRANT_COLLECTION_NAME = os.getenv("QDRANT_COLLECTION", "aic_frames_siglip")
 
-# SigLIP-SO400M-patch14-384: output 1152-dim (không phải CLIP ViT-B/32 = 512)
-SIGLIP_MODEL_NAME = "google/siglip-so400m-patch14-384"
+# PHẢI khớp đúng SIGLIP_MODEL_ID (dòng dưới, model dùng để sinh siglip_features/*.npy)
+# - trước đây 2 hằng số này trỏ 2 bản SigLIP khác nhau (v1 vs v2), khiến vector
+# câu query và vector ảnh nằm ở 2 không gian khác nhau, cosine similarity vô nghĩa.
+SIGLIP_MODEL_NAME = "google/siglip2-so400m-patch14-384"
 VECTOR_SIZE = 1152
 
 # Mặc định 5s là quá ngắn: tạo payload index hoặc upsert batch lớn đều vượt ngưỡng

@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import json
 import argparse
@@ -8,9 +9,16 @@ import zipfile
 import shutil
 from pathlib import Path
 
-def to_real_frame_idx(video_id: str, frame_idx: int) -> int:
-    """Giả lập hàm chuyển đổi frame. Ở Production, cần map chính xác."""
-    return int(frame_idx)
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+# src/common/frame_utils.to_real_frame_idx() giả định frame_id là số thứ tự
+# keyframe ("n") và tra map_keyframes/<video_id>.csv để đổi sang frame_idx thật.
+# Nhưng qdrant_loader.py (src/ingestion/qdrant_loader.py:116) đã gán thẳng
+# frame_id = frame_idx ngay lúc nạp Qdrant, nên frame_id trả về từ API ĐÃ LÀ
+# frame thật - gọi hàm đó luôn tra "n" trật (vì input không phải n), fallback về
+# int(frame_id) không đổi - tốn IO đọc CSV + spam warning mà không đổi được gì.
+def to_real_frame_idx(video_id: str, frame_id) -> int:
+    return int(frame_id)
 
 def parse_query_file(file_path: str):
     """
@@ -68,40 +76,68 @@ def process_and_write_results(q_type: str, query_data, api_url: str, output_csv:
             # Trake thường là danh sách sự kiện
             event_queries = []
             if isinstance(query_data, str):
-                # Chia mỗi dòng là 1 sự kiện nếu format là text thuần
-                event_queries = [line.strip() for line in query_data.split('\n') if line.strip()]
+                # Chỉ lấy dòng khớp "E<số>:" làm event, bỏ tiền tố trước khi gửi
+                # search. Một số file mẫu có 1 dòng mô tả chung ở đầu trước khi
+                # liệt kê E1..EN - split theo mọi dòng không rỗng sẽ đếm luôn
+                # dòng đó thành 1 event thừa, lệch số lượng frame_id yêu cầu.
+                for line in query_data.split('\n'):
+                    m = re.match(r'^E\d+:\s*(.*)', line.strip())
+                    if m:
+                        event_queries.append(m.group(1).strip())
             else:
                 event_queries = query_data.get("event_queries", [])
                 
             res = requests.post(
-                f"{api_url}/search/trake", 
+                f"{api_url}/search/trake",
                 json={"event_queries": event_queries, "top_k": 100},
                 headers=headers
             )
             res.raise_for_status()
             results = res.json()
-            
+
+            # Solver TRAKE yêu cầu 1 video xuất hiện trong top-100 candidate của
+            # TẤT CẢ sự kiện - với sự kiện ngắn/mơ hồ dễ không có video nào khớp
+            # đủ, trả về rỗng. File .csv rỗng có nguy cơ làm hệ thống BTC parse
+            # lỗi cả lượt nộp, nên fallback về KIS của riêng sự kiện đầu tiên,
+            # lặp lại cùng 1 frame cho đủ N events - thà đoán còn hơn để trống.
+            if not results and event_queries:
+                print(f"   ⚠️ TRAKE rỗng cho {os.path.basename(output_csv)} - fallback KIS sự kiện đầu tiên.")
+                kis_res = requests.post(
+                    f"{api_url}/search/kis",
+                    json={"query": event_queries[0], "top_k": 1},
+                    headers=headers
+                )
+                kis_res.raise_for_status()
+                kis_results = kis_res.json()
+                if kis_results:
+                    top = kis_results[0]
+                    results = [{
+                        "video_id": top["video_id"],
+                        "frame_ids": [top["frame_id"]] * len(event_queries),
+                        "score": top["score"],
+                    }]
+
     except Exception as e:
         print(f"❌ Lỗi khi gọi API cho file {os.path.basename(output_csv)}: {e}")
         return False
 
     # Ghi ra file CSV chuẩn BTC
-    # Dùng QUOTE_MINIMAL mặc định của Python, nhưng đối với câu trả lời dạng chữ, có thể ép QUOTE_NONNUMERIC nếu cần.
-    # BTC chấp nhận chuẩn quote của CSV tiêu chuẩn.
     with open(output_csv, mode='w', newline='', encoding='utf-8') as f:
-        # Nếu là QA, bọc ngoặc kép cho tất cả các câu trả lời để an toàn 100%
-        if q_type == "qa":
-            writer = csv.writer(f, quoting=csv.QUOTE_ALL)
-        else:
-            writer = csv.writer(f, quoting=csv.QUOTE_MINIMAL)
-            
+        # QUOTE_MINIMAL cho mọi loại - đúng khớp ví dụ chuẩn trong thể lệ (chỉ
+        # answer mới quote khi có dấu phẩy/ngoặc kép/xuống dòng; video_id và
+        # frame_id (số) không nên bị quote thừa, tránh sai lệch nếu hệ thống
+        # BTC không parse CSV chuẩn mà so khớp chuỗi thô).
+        writer = csv.writer(f, quoting=csv.QUOTE_MINIMAL)
+
         for result in results[:100]:
             if q_type == "kis":
                 real_frame = to_real_frame_idx(result["video_id"], result["frame_id"])
                 writer.writerow([result["video_id"], real_frame])
             elif q_type == "qa":
                 real_frame = to_real_frame_idx(result["video_id"], result["frame_id"])
-                writer.writerow([result["video_id"], real_frame, result.get("answer", "")])
+                # Thể lệ: answer tối đa 100 ký tự.
+                answer = result.get("answer", "")[:100]
+                writer.writerow([result["video_id"], real_frame, answer])
             elif q_type == "trake":
                 real_frames = [to_real_frame_idx(result["video_id"], f) for f in result.get("frame_ids", [])]
                 row = [result["video_id"]] + real_frames
@@ -176,7 +212,7 @@ def generate_submission(query_dir: str, api_url: str):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Tool tạo file ZIP nộp bài thi AIC 2026")
     parser.add_argument("--query_dir", type=str, required=True, help="Thư mục chứa các file .txt của BTC")
-    parser.add_argument("--url", type=str, default="https://curvy-cows-smile.loca.lt", help="URL của API Backend (Kaggle)")
+    parser.add_argument("--url", type=str, default="https://sour-bobcats-shine.loca.lt/", help="URL của API Backend (Kaggle)")
     args = parser.parse_args()
     
     generate_submission(args.query_dir, args.url)

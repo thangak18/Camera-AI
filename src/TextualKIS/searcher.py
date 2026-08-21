@@ -149,6 +149,7 @@ class TextualKISSearcher:
                     video_id=hit_map[uid].payload.get("video_id", ""),
                     frame_id=str(hit_map[uid].payload.get("frame_id", "")),
                     score=round(hit_map[uid].score, 6),
+                    n=hit_map[uid].payload.get("n"),
                 )
                 for uid in final_ids
                 if uid in hit_map
@@ -160,6 +161,7 @@ class TextualKISSearcher:
                     video_id=(hit.payload or {}).get("video_id", ""),
                     frame_id=str((hit.payload or {}).get("frame_id", "")),
                     score=round(hit.score, 6),
+                    n=(hit.payload or {}).get("n"),
                 )
                 for hit in qdrant_hits[:top_k]
             ]
