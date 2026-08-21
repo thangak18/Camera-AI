@@ -111,6 +111,9 @@ GEMINI_MODELS = [
     "models/gemini-3.5-flash-lite",
     "models/gemini-3.1-flash-lite",
     "models/gemini-flash-lite-latest",
+    # Chính thông báo 404 của Google chỉ định model này thay cho gemini-2.5-flash
+    # đã bị gỡ. Để cuối: nặng hơn bản -lite, chỉ dùng khi mọi bản lite đều chết.
+    "models/gemini-3.6-flash",
 ]
 
 # ==========================================
