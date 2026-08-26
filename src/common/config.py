@@ -116,6 +116,8 @@ GEMINI_MODELS = [
     "models/gemini-3.6-flash",
 ]
 
+MAX_IMAGE_SIDE = 1024
+
 # ==========================================
 # Ngân sách thời gian (giây)
 # ==========================================
