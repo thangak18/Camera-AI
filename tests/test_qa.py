@@ -30,6 +30,7 @@ try:
 except ImportError:
     pass
 
+from src.vlm import qa
 from src.vlm.client import DEFAULT_ANSWER, probe_models
 from src.vlm.qa import answer_qa, collect_ns
 
@@ -121,6 +122,31 @@ def test_spread() -> None:
     check("video hạng nhất vẫn đứng đầu", rows[0]["video_id"] == "V1")
 
 
+def test_frame_pick() -> None:
+    """VLM chỉ frame nào thì frame đó phải leo lên đầu nhóm."""
+    print("\n[5] VLM chỉ frame")
+    real_backend = qa.VLM_BACKEND
+    # ns của nhóm sau collect_ns là [58,59,60,61,63,64,65,69,74];
+    # ảnh thứ 2 ứng với n=59, đúng tấm chứa chyron.
+    qa.VLM_BACKEND = lambda prompt, images=None: (
+        '{"answer": "Tà Pừa", "frame": 2, "confidence": 0.9}'
+    )
+    try:
+        rows = answer_qa(GT_QUESTION, make(GT_VIDEO, GT_NS),
+                         n_vlm_calls=1, deadline_s=10.0)
+        check("frame VLM chỉ leo lên dòng đầu",
+              rows[0]["frame_id"] == "059", rows[0]["frame_id"])
+        check("answer vẫn đúng", rows[0]["answer"] == "Tà Pừa")
+        qa.VLM_BACKEND = lambda prompt, images=None: '{"answer": "x"}'
+        rows = answer_qa("q", make(GT_VIDEO, GT_NS), n_vlm_calls=1, deadline_s=10.0)
+        check("thiếu trường frame → giữ thứ tự cũ", rows[0]["frame_id"] == "061")
+        qa.VLM_BACKEND = lambda prompt, images=None: '{"answer": "x", "frame": 99}'
+        rows = answer_qa("q", make(GT_VIDEO, GT_NS), n_vlm_calls=1, deadline_s=10.0)
+        check("frame ngoài dải → giữ thứ tự cũ", rows[0]["frame_id"] == "061")
+    finally:
+        qa.VLM_BACKEND = real_backend
+
+
 def test_degradation() -> None:
     """Các đường lỗi phải degrade, không được raise."""
     print("\n[2] chịu lỗi")
@@ -139,7 +165,8 @@ def test_degradation() -> None:
     check("video không tồn tại → không raise, đủ dòng", len(rows) == 3)
 
     rows = answer_qa("", make(GT_VIDEO, [61]), n_vlm_calls=1, deadline_s=5.0)
-    check("câu hỏi rỗng → không raise", len(rows) == 1)
+    check("câu hỏi rỗng → không raise, mọi dòng có answer",
+          isinstance(rows, list) and all(r.get("answer") for r in rows))
 
 
 # ---------------------------------------------------------------------------
@@ -182,6 +209,7 @@ def main() -> None:
 
     test_collect_ns()
     test_spread()
+    test_frame_pick()
 
     if args.offline:
         print("\n(bỏ qua phần gọi mạng)")
