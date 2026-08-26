@@ -128,7 +128,7 @@ def test_frame_pick() -> None:
     real_backend = qa.VLM_BACKEND
     # ns của nhóm sau collect_ns là [58,59,60,61,63,64,65,69,74];
     # ảnh thứ 2 ứng với n=59, đúng tấm chứa chyron.
-    qa.VLM_BACKEND = lambda prompt, images=None: (
+    qa.VLM_BACKEND = lambda prompt, images=None, **kw: (
         '{"answer": "Tà Pừa", "frame": 2, "confidence": 0.9}'
     )
     try:
@@ -137,10 +137,10 @@ def test_frame_pick() -> None:
         check("frame VLM chỉ leo lên dòng đầu",
               rows[0]["frame_id"] == "059", rows[0]["frame_id"])
         check("answer vẫn đúng", rows[0]["answer"] == "Tà Pừa")
-        qa.VLM_BACKEND = lambda prompt, images=None: '{"answer": "x"}'
+        qa.VLM_BACKEND = lambda prompt, images=None, **kw: '{"answer": "x"}'
         rows = answer_qa("q", make(GT_VIDEO, GT_NS), n_vlm_calls=1, deadline_s=10.0)
         check("thiếu trường frame → giữ thứ tự cũ", rows[0]["frame_id"] == "061")
-        qa.VLM_BACKEND = lambda prompt, images=None: '{"answer": "x", "frame": 99}'
+        qa.VLM_BACKEND = lambda prompt, images=None, **kw: '{"answer": "x", "frame": 99}'
         rows = answer_qa("q", make(GT_VIDEO, GT_NS), n_vlm_calls=1, deadline_s=10.0)
         check("frame ngoài dải → giữ thứ tự cũ", rows[0]["frame_id"] == "061")
     finally:
@@ -167,6 +167,28 @@ def test_degradation() -> None:
     rows = answer_qa("", make(GT_VIDEO, [61]), n_vlm_calls=1, deadline_s=5.0)
     check("câu hỏi rỗng → không raise, mọi dòng có answer",
           isinstance(rows, list) and all(r.get("answer") for r in rows))
+
+
+def test_timeout_budget() -> None:
+    """Trần mỗi call phải nhỏ hơn deadline, nếu không cf.wait luôn trả rỗng."""
+    print("\n[6] ngân sách thời gian")
+    from src.common.config import QA_DEADLINE, VLM_CALL_TIMEOUT
+    from src.vlm import qa
+    check("VLM_CALL_TIMEOUT * 3 <= QA_DEADLINE",
+          VLM_CALL_TIMEOUT * 3 <= QA_DEADLINE,
+          f"{VLM_CALL_TIMEOUT} × 3 vs {QA_DEADLINE}")
+    check("mặc định đủ rộng cho call chậm (>= 10s)", VLM_CALL_TIMEOUT >= 10.0)
+    seen = {}
+    real = qa.VLM_BACKEND
+    qa.VLM_BACKEND = lambda prompt, images=None, **kw: (
+        seen.update(kw) or '{"answer": "x", "frame": 1}'
+    )
+    try:
+        answer_qa("q", make(GT_VIDEO, [61]), n_vlm_calls=1, deadline_s=9.0)
+        check("timeout được truyền xuống backend", seen.get("timeout_s") == 3.0,
+              str(seen))
+    finally:
+        qa.VLM_BACKEND = real
 
 
 # ---------------------------------------------------------------------------
@@ -210,6 +232,7 @@ def main() -> None:
     test_collect_ns()
     test_spread()
     test_frame_pick()
+    test_timeout_budget()
 
     if args.offline:
         print("\n(bỏ qua phần gọi mạng)")

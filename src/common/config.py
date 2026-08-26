@@ -121,19 +121,24 @@ MAX_IMAGE_SIDE = 1024
 # ==========================================
 # Ngân sách thời gian (giây)
 # ==========================================
-# BTC yêu cầu: Dạng 1 & 3 < 3s, Dạng 2 < 10s.
-# Đo được trên T4: Dạng 1 = 33ms, Dạng 2 = 8041ms.
-VLM_CALL_TIMEOUT = float(os.getenv("AIC_VLM_TIMEOUT", 10.0))
+# Đêm thi KHÔNG tính thời gian (4 lượt nộp trong 3 tiếng) và file nộp sinh
+# offline, nên mặc định ưu tiên ĐÚNG hơn NHANH.
+#
+# Vẫn phải có trần cứng: bug cũ để answer_qa chạy 123s dù deadline đặt 9s.
+# Bất biến bắt buộc: VLM_CALL_TIMEOUT * (số model client thử) <= QA_DEADLINE.
+# Sai dấu bất biến này thì model đầu treo hết deadline, cf.wait trả rỗng, và
+# TOÀN BỘ 100 dòng ăn DEFAULT_ANSWER - đúng ca 4/4 file Q&A hỏng ở Đợt 1.
+VLM_CALL_TIMEOUT = float(os.getenv("AIC_VLM_CALL_TIMEOUT", 25.0))
+QA_DEADLINE = float(os.getenv("AIC_QA_DEADLINE", 300.0))
+QA_N_VLM_CALLS = int(os.getenv("AIC_QA_N_VLM_CALLS", 0))   # 0 = hỏi HẾT các nhóm
 
-# Trần tuyệt đối cho answer_qa. Để dưới 10s và chừa chỗ cho retrieval + rerank.
-QA_DEADLINE = float(os.getenv("AIC_QA_DEADLINE", 8.0))
+# Profile live, chỉ dùng nếu vòng sau BTC đổi luật và bấm giờ trở lại.
+VLM_CALL_TIMEOUT_LIVE = float(os.getenv("AIC_VLM_CALL_TIMEOUT_LIVE", 2.5))
+QA_DEADLINE_LIVE = float(os.getenv("AIC_QA_DEADLINE_LIVE", 8.0))
+QA_N_VLM_CALLS_LIVE = int(os.getenv("AIC_QA_N_VLM_CALLS_LIVE", 5))
 
 # Giới hạn burst để né rate limit 429.
 QA_MAX_WORKERS = int(os.getenv("AIC_QA_WORKERS", 3))
-
-# Số nhóm video được hỏi VLM thật. Đã tune trên devset: 5 cho 4 answer khác
-# nhau; 10 thì chạm deadline và mọi dòng ăn cùng một fallback (tệ hơn).
-QA_N_VLM_CALLS = int(os.getenv("AIC_QA_N_CALLS", 5))
 
 # Số keyframe lân cận mỗi bên gửi kèm cho VLM. 0 = chỉ 1 ảnh; đo được ngang
 # 3 ảnh về độ chính xác (90%) nhưng nhanh và ít timeout hơn.
