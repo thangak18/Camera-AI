@@ -38,7 +38,9 @@ Chọn ảnh gửi cho VLM (đo lại 24/08, xem `scripts/diag_qa_grid.py`):
 from __future__ import annotations
 
 import concurrent.futures as cf
+import json
 import logging
+import re
 from collections import Counter, OrderedDict
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -66,6 +68,8 @@ Chỉ trả về JSON, không giải thích, không markdown:
 {{"answer": "<ngắn nhất có thể, 1-5 từ, KHÔNG kèm đơn vị thừa>", "confidence": <0.0-1.0>}}
 
 Nếu không nhìn thấy thông tin để trả lời, đặt answer = "khong ro"."""
+
+PROMPT_QA_FRAME = """Bạn đang xem {n_images} khung hình liên tiếp từ một video,đánh số 1 đến {n_images} theo thứ tự thời gian.Trả lời câu hỏi dựa CHỈ trên những gì nhìn thấy được.Câu hỏi: {question}Chỉ trả về JSON, không giải thích, không markdown:{{"answer": "<ngắn nhất có thể, 1-5 từ>", "frame": <số thứ tự ảnh chứa thông tin dùng để trả lời, 1-{n_images}>, "confidence": <0.0-1.0>}}Nếu không nhìn thấy thông tin để trả lời, đặt answer = "khong ro" và frame = 0."""
 
 VLM_BACKEND: Callable[..., str] = call_gemini
 """Backend đang dùng. Đổi sang Qwen2-VL local nếu Gemini chết đêm thi:
@@ -128,23 +132,27 @@ def collect_ns(group: Sequence[dict], pad: int = QA_NEIGHBOR_PAD,
 
 
 def load_frames(video_id: str, ns: Sequence[int],
-                keyframes_dir: Path = KEYFRAMES_DIR) -> list[Image.Image]:
+                keyframes_dir: Path = KEYFRAMES_DIR
+                ) -> tuple[list[Image.Image], list[int]]:
     """Nạp ảnh keyframe theo danh sách `n`, bỏ qua tấm thiếu hoặc hỏng.
 
-    Nhận `n` (số thứ tự keyframe 1..N) chứ KHÔNG phải `frame_id`: ảnh trên đĩa
-    đặt tên theo n (`001.jpg`), còn frame_id là frame_idx thật của video. Bản cũ
-    truyền frame_id vào đây nên 96.5% trường hợp không mở được ảnh nào.
+    Returns:
+        (ảnh, n thực nạp được) — hai danh sách song song. Phải trả cả `n` vì
+        VLM đếm ảnh theo thứ tự nhận được: bỏ qua một tấm giữa chừng là mọi
+        chỉ số sau đó lệch, và `parse_frame` sẽ map ra nhầm keyframe.
     """
     imgs: list[Image.Image] = []
+    got: list[int] = []
     for n in ns:
         p = keyframe_path(video_id, int(n), keyframes_dir)
         if not p.exists():
             continue
         try:
             imgs.append(Image.open(p).convert("RGB"))
+            got.append(int(n))
         except Exception as exc:
             logger.debug("Không mở được %s: %s", p, exc)
-    return imgs
+    return imgs, got
 
 
 def load_neighbors(video_id: str, n: Any, k: int = 0,
@@ -153,18 +161,77 @@ def load_neighbors(video_id: str, n: Any, k: int = 0,
     if n is None:
         return []
     ns = [int(n) + off for off in range(-k, k + 1)]
-    return load_frames(video_id, [x for x in ns if x > 0], keyframes_dir)
+    return load_frames(video_id, [x for x in ns if x > 0], keyframes_dir)[0]
 
 
-def ask_one(question_vi: str, video_id: str,
-            ns: Sequence[int]) -> tuple[str, float]:
-    """Hỏi VLM về một nhóm keyframe cùng video. Lỗi → (DEFAULT_ANSWER, 0.0)."""
-    imgs = load_frames(video_id, ns)
+def parse_frame(raw: str, ns: Sequence[int]) -> int | None:
+    """Vớt `n` của khung hình mà VLM nói là chứa đáp án.
+
+    VLM trả số thứ tự ảnh (1..len(ns)) chứ không phải `n`, vì bắt model nhớ
+    dãy số rời rạc như [58, 59, 60, 63] dễ sai hơn nhiều so với đếm 1, 2, 3.
+
+    Returns:
+        `n` tương ứng, hoặc None nếu thiếu trường, ngoài dải, hoặc bằng 0
+        (VLM báo không thấy). None nghĩa là giữ nguyên thứ tự cũ.
+    """
+    if not raw:
+        return None
+    txt = re.sub(r"^```(?:json)?|```$", "", raw.strip(), flags=re.M).strip()
+    idx: Any = None
+    try:
+        idx = json.loads(txt).get("frame")
+    except Exception:
+        if m := re.search(r'"frame"\s*:\s*(\d+)', txt):
+            idx = m.group(1)
+    try:
+        i = int(idx)
+    except (TypeError, ValueError):
+        return None
+    return ns[i - 1] if 1 <= i <= len(ns) else None
+
+
+def ask_one(question_vi: str, video_id: str, ns: Sequence[int],
+            ask_frame: bool = True) -> tuple[str, float, int | None]:
+    """Hỏi VLM về một nhóm keyframe cùng video.
+
+    Returns:
+        (answer, confidence, best_n). `best_n` là keyframe VLM nói là chứa đáp
+        án, None nếu không xác định được. Lỗi → (DEFAULT_ANSWER, 0.0, None).
+    """
+    imgs, got = load_frames(video_id, ns)
     if not imgs:
         logger.warning("Không nạp được ảnh nào cho %s (n=%s)", video_id, list(ns))
-        return DEFAULT_ANSWER, 0.0
-    return parse_answer(VLM_BACKEND(PROMPT_QA.format(question=question_vi),
-                                    images=imgs))
+        return DEFAULT_ANSWER, 0.0, None
+
+    if ask_frame:
+        prompt = PROMPT_QA_FRAME.format(question=question_vi, n_images=len(imgs))
+    else:
+        prompt = PROMPT_QA.format(question=question_vi)
+
+    raw = VLM_BACKEND(prompt, images=imgs)
+    answer, conf = parse_answer(raw)
+    best_n = parse_frame(raw, got) if ask_frame else None
+    return answer, conf, best_n
+
+
+def reorder_by_frame(cs: list[dict], best_n: int | None) -> list[dict]:
+    """Đưa candidate gần `best_n` nhất lên đầu nhóm.
+
+    R-Score Dạng 2 nhân ba điều kiện, nên answer đúng mà frame lệch cửa sổ
+    [s,e] thì vẫn 0 điểm. Đợt 1 nhóm L22_V008 có cả frame 6913 và 6659 nằm
+    ngoài cửa sổ; nếu một trong hai đứng đầu nhóm thì câu đó mất điểm dù answer
+    đã đúng.
+
+    `best_n` không trùng candidate nào thì chèn thêm một dòng cho chính nó —
+    ảnh đó có thật trên đĩa và `to_real_frame_idx()` tra được, nên hợp lệ.
+    """
+    if best_n is None:
+        return cs
+    ranked = sorted(cs, key=lambda c: abs(int(c["n"]) - best_n)
+                    if c.get("n") is not None else 10**9)
+    if not any(c.get("n") is not None and int(c["n"]) == best_n for c in ranked):
+        ranked.insert(0, {**ranked[0], "frame_id": f"{best_n:03d}", "n": best_n})
+    return ranked
 
 
 def interleave_by_video(groups: "OrderedDict[str, list[dict]]") -> list[dict]:
@@ -197,6 +264,7 @@ def answer_qa(question_vi: str, candidates: Sequence[Any],
               max_workers: int = QA_MAX_WORKERS,
               images_per_call: int = QA_IMAGES_PER_CALL,
               neighbor_pad: int = QA_NEIGHBOR_PAD,
+              ask_frame: bool = True,
               spread_videos: bool = True,
               top_k: int = SUBMISSION_ROWS) -> list[dict]:
     """Sinh đủ 100 dòng cho Dạng 2.
@@ -211,6 +279,7 @@ def answer_qa(question_vi: str, candidates: Sequence[Any],
         max_workers: Giới hạn burst để né 429.
         images_per_call: Trần số ảnh mỗi lần gọi VLM.
         neighbor_pad: Số khung lân cận mỗi bên dùng để bù khi nhóm ít candidate.
+        ask_frame: Yêu cầu VLM chỉ thêm số thứ tự ảnh chứa thông tin.
         spread_videos: Rải các video xen kẽ để 5 dòng đầu là 5 video khác
             nhau, thay vì dồn hết frame của video hạng nhất lên đầu.
         top_k: Số dòng trả về.
@@ -233,6 +302,7 @@ def answer_qa(question_vi: str, candidates: Sequence[Any],
 
     targets = list(groups.items())[:n_vlm_calls]
     answers: dict[str, str] = {}
+    best_ns: dict[str, int] = {}
 
     ex = cf.ThreadPoolExecutor(max_workers=max_workers)
     try:
@@ -243,12 +313,15 @@ def answer_qa(question_vi: str, candidates: Sequence[Any],
                 logger.warning("Nhóm %s không candidate nào có 'n' — bỏ qua. "
                                "Kiểm tra payload Qdrant.", vid)
                 continue
-            futs[ex.submit(ask_one, question_vi, vid, ns)] = vid
+            futs[ex.submit(ask_one, question_vi, vid, ns, ask_frame)] = vid
 
         done, _ = cf.wait(futs, timeout=deadline_s)
         for f in done:
             try:
-                answers[futs[f]] = f.result()[0]
+                answer, _, best_n = f.result()
+                answers[futs[f]] = answer
+                if best_n is not None:
+                    best_ns[futs[f]] = best_n
             except Exception as exc:
                 logger.debug("future lỗi: %s", exc)
     except Exception as exc:
@@ -263,6 +336,12 @@ def answer_qa(question_vi: str, candidates: Sequence[Any],
     fallback = Counter(real).most_common(1)[0][0] if real else DEFAULT_ANSWER
     logger.info("answer_qa: %d/%d nhóm trả lời được (%d nhóm có answer thật)",
                 len(answers), len(targets), len(real))
+
+    if best_ns:
+        groups = OrderedDict((vid, reorder_by_frame(cs, best_ns.get(vid)))
+                             for vid, cs in groups.items())
+        logger.info("answer_qa: %d/%d nhóm được VLM chỉ frame",
+                    len(best_ns), len(targets))
 
     ordered = interleave_by_video(groups) if spread_videos else [
         c for cs in groups.values() for c in cs
