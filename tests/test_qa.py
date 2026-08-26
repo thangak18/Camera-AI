@@ -106,6 +106,21 @@ def test_collect_ns() -> None:
     check("không sinh n <= 0", all(n > 0 for n in edge), f"{edge}")
 
 
+def test_spread() -> None:
+    """5 dòng đầu phải là 5 video khác nhau."""
+    print("\n[4] rải video")
+    cands = (make("V1", list(range(1, 16)))      # 15 frame, giống L22_V020
+             + make("V2", [1, 2])
+             + make("V3", [1, 2, 3])
+             + make("V4", [1])
+             + make("V5", [1, 2]))
+    rows = answer_qa("hỏi gì đó", cands, n_vlm_calls=0, deadline_s=1.0)
+    head = [r["video_id"] for r in rows[:5]]
+    check("5 dòng đầu là 5 video khác nhau", len(set(head)) == 5, f"{head}")
+    check("không mất dòng nào", len(rows) == len(cands), f"{len(rows)}")
+    check("video hạng nhất vẫn đứng đầu", rows[0]["video_id"] == "V1")
+
+
 def test_degradation() -> None:
     """Các đường lỗi phải degrade, không được raise."""
     print("\n[2] chịu lỗi")
@@ -166,6 +181,7 @@ def main() -> None:
     args = ap.parse_args()
 
     test_collect_ns()
+    test_spread()
 
     if args.offline:
         print("\n(bỏ qua phần gọi mạng)")
