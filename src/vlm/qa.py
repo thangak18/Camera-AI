@@ -167,12 +167,37 @@ def ask_one(question_vi: str, video_id: str,
                                     images=imgs))
 
 
+def interleave_by_video(groups: "OrderedDict[str, list[dict]]") -> list[dict]:
+    """Rải các nhóm video xen kẽ nhau thay vì xếp hết nhóm này rồi tới nhóm khác.
+
+    Bản cũ duyệt `for cs in groups.values() for c in cs`, tức là đổ hết frame
+    của video hạng nhất rồi mới sang video thứ hai. Đợt 1 câu p1-17, L22_V020
+    chiếm trọn 15 dòng đầu nên video đúng (L22_V008) bị đẩy xuống dòng 16 —
+    mất sạch R@1 và R@5 dù answer về sau có đúng đi nữa.
+
+    Vòng i lấy frame thứ i của mỗi video, nên 5 dòng đầu là 5 video khác nhau.
+
+    Đánh đổi: frame thứ hai của video hạng nhất bị đẩy xuống sau vòng một. Với
+    Dạng 2 thì đáng, vì mỗi video chỉ có một answer — thêm frame cùng video chỉ
+    giúp trúng cửa sổ `[s,e]`, mà việc đó để VLM tự chỉ frame chứa đáp án.
+
+    Returns:
+        Danh sách candidate đã rải, giữ nguyên tổng số phần tử.
+    """
+    lanes = list(groups.values())
+    out: list[dict] = []
+    for i in range(max(len(cs) for cs in lanes)):
+        out.extend(cs[i] for cs in lanes if i < len(cs))
+    return out
+
+
 def answer_qa(question_vi: str, candidates: Sequence[Any],
               n_vlm_calls: int = QA_N_VLM_CALLS,
               deadline_s: float = QA_DEADLINE,
               max_workers: int = QA_MAX_WORKERS,
               images_per_call: int = QA_IMAGES_PER_CALL,
               neighbor_pad: int = QA_NEIGHBOR_PAD,
+              spread_videos: bool = True,
               top_k: int = SUBMISSION_ROWS) -> list[dict]:
     """Sinh đủ 100 dòng cho Dạng 2.
 
@@ -186,6 +211,8 @@ def answer_qa(question_vi: str, candidates: Sequence[Any],
         max_workers: Giới hạn burst để né 429.
         images_per_call: Trần số ảnh mỗi lần gọi VLM.
         neighbor_pad: Số khung lân cận mỗi bên dùng để bù khi nhóm ít candidate.
+        spread_videos: Rải các video xen kẽ để 5 dòng đầu là 5 video khác
+            nhau, thay vì dồn hết frame của video hạng nhất lên đầu.
         top_k: Số dòng trả về.
 
     Returns:
@@ -237,6 +264,9 @@ def answer_qa(question_vi: str, candidates: Sequence[Any],
     logger.info("answer_qa: %d/%d nhóm trả lời được (%d nhóm có answer thật)",
                 len(answers), len(targets), len(real))
 
+    ordered = interleave_by_video(groups) if spread_videos else [
+        c for cs in groups.values() for c in cs
+    ]
     return [{"video_id": c["video_id"], "frame_id": c["frame_id"],
              "answer": answers.get(c["video_id"], fallback)}
-            for cs in groups.values() for c in cs][:top_k]
+            for c in ordered][:top_k]
