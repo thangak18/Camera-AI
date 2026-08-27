@@ -53,6 +53,7 @@ from src.common.config import (
     QA_MAX_WORKERS,
     QA_N_VLM_CALLS,
     SUBMISSION_ROWS,
+    VLM_CALL_TIMEOUT,
 )
 from src.common.frame_utils import keyframe_path
 from src.vlm.client import DEFAULT_ANSWER, call_gemini, parse_answer
@@ -191,7 +192,8 @@ def parse_frame(raw: str, ns: Sequence[int]) -> int | None:
 
 
 def ask_one(question_vi: str, video_id: str, ns: Sequence[int],
-            ask_frame: bool = True) -> tuple[str, float, int | None]:
+            ask_frame: bool = True,
+            call_timeout_s: float | None = None) -> tuple[str, float, int | None]:
     """Hỏi VLM về một nhóm keyframe cùng video.
 
     Returns:
@@ -208,7 +210,8 @@ def ask_one(question_vi: str, video_id: str, ns: Sequence[int],
     else:
         prompt = PROMPT_QA.format(question=question_vi)
 
-    raw = VLM_BACKEND(prompt, images=imgs)
+    kwargs = {} if call_timeout_s is None else {"timeout_s": call_timeout_s}
+    raw = VLM_BACKEND(prompt, images=imgs, **kwargs)
     answer, conf = parse_answer(raw)
     best_n = parse_frame(raw, got) if ask_frame else None
     return answer, conf, best_n
@@ -266,7 +269,8 @@ def answer_qa(question_vi: str, candidates: Sequence[Any],
               neighbor_pad: int = QA_NEIGHBOR_PAD,
               ask_frame: bool = True,
               spread_videos: bool = True,
-              top_k: int = SUBMISSION_ROWS) -> list[dict]:
+              top_k: int = SUBMISSION_ROWS,
+              call_timeout_s: float | None = None) -> list[dict]:
     """Sinh đủ 100 dòng cho Dạng 2.
 
     Args:
@@ -274,7 +278,9 @@ def answer_qa(question_vi: str, candidates: Sequence[Any],
             Gemini mạnh tiếng Việt, dịch máy chỉ làm mất sắc thái
             ("áo dài" → "long dress" là miss luôn).
         candidates: Top-100 đã rerank.
-        n_vlm_calls: Số nhóm video được hỏi VLM thật.
+        n_vlm_calls: Số nhóm video được hỏi VLM thật. 0 = hỏi hết. Nhóm không
+            được hỏi phải ăn answer của video khác, gần như chắc chắn sai —
+            chỉ giới hạn khi thật sự bị bấm giờ.
         deadline_s: Trần thời gian tuyệt đối; luôn kết thúc trước mốc này.
         max_workers: Giới hạn burst để né 429.
         images_per_call: Trần số ảnh mỗi lần gọi VLM.
@@ -283,6 +289,10 @@ def answer_qa(question_vi: str, candidates: Sequence[Any],
         spread_videos: Rải các video xen kẽ để 5 dòng đầu là 5 video khác
             nhau, thay vì dồn hết frame của video hạng nhất lên đầu.
         top_k: Số dòng trả về.
+        call_timeout_s: Trần mỗi lần gọi VLM. None → tự lấy deadline_s / 3
+            (số model client sẽ thử lần lượt). Đặt lớn hơn deadline là lỗi:
+            model đầu treo hết deadline, cf.wait trả rỗng, mọi dòng rơi về
+            DEFAULT_ANSWER — đúng ca 4/4 file Q&A hỏng ở Đợt 1.
 
     Returns:
         Tối đa `top_k` dict `{"video_id", "frame_id", "answer"}`.
@@ -296,11 +306,17 @@ def answer_qa(question_vi: str, candidates: Sequence[Any],
     if not items:
         return []
 
+    if call_timeout_s is None:
+        call_timeout_s = max(1.0, min(VLM_CALL_TIMEOUT, deadline_s / 3))
+
     groups: OrderedDict[str, list[dict]] = OrderedDict()
     for c in items:
         groups.setdefault(c["video_id"], []).append(c)
 
-    targets = list(groups.items())[:n_vlm_calls]
+    targets = list(groups.items())
+    if n_vlm_calls > 0:
+        targets = targets[:n_vlm_calls]
+
     answers: dict[str, str] = {}
     best_ns: dict[str, int] = {}
 
@@ -313,7 +329,8 @@ def answer_qa(question_vi: str, candidates: Sequence[Any],
                 logger.warning("Nhóm %s không candidate nào có 'n' — bỏ qua. "
                                "Kiểm tra payload Qdrant.", vid)
                 continue
-            futs[ex.submit(ask_one, question_vi, vid, ns, ask_frame)] = vid
+            futs[ex.submit(ask_one, question_vi, vid, ns, ask_frame,
+                           call_timeout_s)] = vid
 
         done, _ = cf.wait(futs, timeout=deadline_s)
         for f in done:

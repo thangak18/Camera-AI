@@ -116,10 +116,17 @@ def probe_models(candidates: list[str] | None = None) -> list[str]:
         try:
             r = _client().models.generate_content(
                 model=m, contents=["ping"],
-                config=types.GenerateContentConfig(max_output_tokens=16))
+                # 512 chứ không phải 16: model mới dành phần lớn token đầu cho
+                # thinking, ping với trần 16 token trả về rỗng và bị loại oan.
+                # Đây là lý do gemini-3.6-flash không bao giờ lọt qua probe.
+                config=types.GenerateContentConfig(max_output_tokens=512))
             if r.text:
                 alive.append(m)
                 logger.info("model OK: %s", m)
+            else:
+                # r.text rỗng KHÔNG raise, nên nhánh này từng loại model trong
+                # im lặng - không có log thì không ai biết model bị gạch tên.
+                logger.warning("model loại vì trả rỗng: %s", m)
         except Exception as exc:
             logger.warning("model hỏng: %s (%s: %s)", m, type(exc).__name__, str(exc)[:80])
 
@@ -129,12 +136,18 @@ def probe_models(candidates: list[str] | None = None) -> list[str]:
     return alive
 
 
-def _to_part(img: Image.Image):
-    """Nén ảnh PIL sang JPEG bytes, hạ cạnh dài về MAX_IMAGE_SIDE."""
+def _to_part(img: Image.Image, max_side: int = MAX_IMAGE_SIDE):
+    """Nén ảnh sang JPEG bytes và đóng gói thành Part để gửi Gemini.
+
+    Args:
+        max_side: Cạnh dài tối đa. 1024 cho Q&A (phải đọc được chyron, biển
+            hiệu); 448 cho rerank (chỉ cần so cảnh với mô tả, nhẹ hơn nhiều
+            khi gửi 10 ảnh một lượt).
+    """
     from google.genai import types
 
     img = img.convert("RGB")
-    img.thumbnail((MAX_IMAGE_SIDE, MAX_IMAGE_SIDE))
+    img.thumbnail((max_side, max_side))
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=80)
     return types.Part.from_bytes(data=buf.getvalue(), mime_type="image/jpeg")
@@ -157,19 +170,21 @@ def _one_call(model: str, contents: list, timeout_s: float) -> str:
 
 
 def call_gemini(prompt: str, images: list[Image.Image] | None = None,
-                timeout_s: float = VLM_CALL_TIMEOUT) -> str:
+                timeout_s: float = VLM_CALL_TIMEOUT,
+                max_side: int = MAX_IMAGE_SIDE) -> str:
     """Gọi Gemini với ảnh tuỳ chọn, thử lần lượt các model khả dụng.
 
     Args:
         prompt: Câu prompt (tiếng Việt được — Gemini mạnh tiếng Việt).
         images: Danh sách ảnh PIL gửi kèm.
         timeout_s: Trần thời gian cho mỗi model.
+        max_side: Cạnh dài tối đa khi nén ảnh.
 
     Returns:
         Chuỗi phản hồi, hoặc **chuỗi rỗng** nếu mọi model đều hỏng.
         KHÔNG BAO GIỜ raise.
     """
-    contents: list[Any] = [_to_part(im) for im in (images or [])] + [prompt]
+    contents: list[Any] = [_to_part(im, max_side=max_side) for im in (images or [])] + [prompt]
 
     for model in (_active_models or GEMINI_MODELS):
         try:
