@@ -107,13 +107,23 @@ GEMINI_KEY_ENV_NAMES = ["GEMINI_API_KEY"] + [f"GEMINI_KEY_{i}" for i in range(2,
 # Google deprecate model liên tục (đã dính 404 giữa lúc phát triển). Đây là thứ
 # tự ưu tiên, hỏng thì nhảy sang cái kế. Chạy `vlm.client.probe_models()` lúc
 # khởi động API để dò cái nào còn sống.
+# Thứ tự ưu tiên: model MẠNH trước, lite làm dự phòng.
+# Trước đây lite đứng đầu vì nhanh, hợp lý khi còn bị bấm giờ. Đêm thi không
+# tính thời gian nữa nên đổi lại: đo trên mẫu p1-17, flash-lite trả "Tà Pứa" /
+# "đèo Tà Pứa" / "Tả Pưa" qua ba lần chạy — lần thứ ba sai dấu cả hai tiếng và
+# sẽ trượt nếu BTC chấm bằng so khớp chuỗi. Đề còn có câu đếm ký hiệu trên bản
+# đồ (p1-15), việc mà bản lite làm kém hơn hẳn.
+# Thứ tự: lite TRƯỚC. Đo trên mẫu p1-17 (tests/test_qa.py [3]):
+#   lite đầu  -> 2.9s,  "Tà Pứa"
+#   flash đầu -> 15.2s, "Đèo Tả Pứa" (3.7-flash timeout 10s ba lần liên tiếp)
+# Model mới dành phần lớn thời gian cho thinking - hợp bài toán suy luận, không
+# hợp việc đọc một dòng chữ trên ảnh. Giữ flash làm dự phòng khi lite chết.
 GEMINI_MODELS = [
     "models/gemini-3.5-flash-lite",
-    "models/gemini-3.1-flash-lite",
     "models/gemini-flash-lite-latest",
-    # Chính thông báo 404 của Google chỉ định model này thay cho gemini-2.5-flash
-    # đã bị gỡ. Để cuối: nặng hơn bản -lite, chỉ dùng khi mọi bản lite đều chết.
-    "models/gemini-3.6-flash",
+    "models/gemini-3.1-flash-lite",
+    "models/gemini-3.5-flash",
+    "models/gemini-3.7-flash",
 ]
 
 MAX_IMAGE_SIDE = 1024

@@ -44,7 +44,6 @@ except ImportError:
 from PIL import Image
 
 from src.common.frame_utils import keyframe_path
-from src.vlm import client as vlm_client
 from src.vlm.client import call_gemini, parse_answer, probe_models
 from src.vlm.qa import PROMPT_QA
 
@@ -116,15 +115,14 @@ def run_one(strategy: str, k: int, max_side: int, limit: int) -> dict:
         return {"answer": "(KHÔNG MỞ ĐƯỢC ẢNH)", "seconds": 0.0,
                 "n_images": 0, "has_gt_frame": has_gt, "ok": False, "ns": got}
 
-    vlm_client.MAX_IMAGE_SIDE = max_side
     t0 = time.perf_counter()
     raw = call_gemini(PROMPT_QA.format(question=QUESTION), images=imgs,
-                      timeout_s=45.0)
+                      timeout_s=45.0, max_side=max_side)
     dt = time.perf_counter() - t0
     answer, _ = parse_answer(raw)
 
     return {"answer": answer, "seconds": dt, "n_images": len(imgs),
-            "has_gt_frame": has_gt, "ok": EXPECTED in norm(answer), "ns": got}
+            "has_gt_frame": has_gt, "ok": norm(EXPECTED) in norm(answer), "ns": got}
 
 
 def main() -> None:
