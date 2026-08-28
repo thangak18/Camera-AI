@@ -104,34 +104,62 @@ def resolve_device() -> str:
 # Đặt qua biến môi trường hoặc Colab Secrets.
 GEMINI_KEY_ENV_NAMES = ["GEMINI_API_KEY"] + [f"GEMINI_KEY_{i}" for i in range(2, 11)]
 
+# Nhịp gọi Gemini tối thiểu giữa hai request (giây). Đêm thi không tính thời
+# gian nên chậm không tốn gì, đổi lại tránh burst - thứ đã làm một project bị
+# đình chỉ vì "repeated Terms of Service violations".
+GEMINI_MIN_INTERVAL_S = float(os.getenv("AIC_GEMINI_MIN_INTERVAL", 0.7))
+
+# Số lần thử lại trên CÙNG key khi gặp 429 trước khi chịu thua và chuyển key.
+GEMINI_RETRY_ON_429 = int(os.getenv("AIC_GEMINI_RETRY_429", 3))
+
+# Thời gian nghỉ của một key sau khi nó cạn quota (giây).
+GEMINI_KEY_COOLDOWN_S = float(os.getenv("AIC_GEMINI_KEY_COOLDOWN", 60.0))
+
 # Google deprecate model liên tục (đã dính 404 giữa lúc phát triển). Đây là thứ
 # tự ưu tiên, hỏng thì nhảy sang cái kế. Chạy `vlm.client.probe_models()` lúc
 # khởi động API để dò cái nào còn sống.
+# Thứ tự ưu tiên: model MẠNH trước, lite làm dự phòng.
+# Trước đây lite đứng đầu vì nhanh, hợp lý khi còn bị bấm giờ. Đêm thi không
+# tính thời gian nữa nên đổi lại: đo trên mẫu p1-17, flash-lite trả "Tà Pứa" /
+# "đèo Tà Pứa" / "Tả Pưa" qua ba lần chạy — lần thứ ba sai dấu cả hai tiếng và
+# sẽ trượt nếu BTC chấm bằng so khớp chuỗi. Đề còn có câu đếm ký hiệu trên bản
+# đồ (p1-15), việc mà bản lite làm kém hơn hẳn.
+# Thứ tự: lite TRƯỚC. Đo trên mẫu p1-17 (tests/test_qa.py [3]):
+#   lite đầu  -> 2.9s,  "Tà Pứa"
+#   flash đầu -> 15.2s, "Đèo Tả Pứa" (3.7-flash timeout 10s ba lần liên tiếp)
+# Model mới dành phần lớn thời gian cho thinking - hợp bài toán suy luận, không
+# hợp việc đọc một dòng chữ trên ảnh. Giữ flash làm dự phòng khi lite chết.
 GEMINI_MODELS = [
     "models/gemini-3.5-flash-lite",
-    "models/gemini-3.1-flash-lite",
     "models/gemini-flash-lite-latest",
-    # Chính thông báo 404 của Google chỉ định model này thay cho gemini-2.5-flash
-    # đã bị gỡ. Để cuối: nặng hơn bản -lite, chỉ dùng khi mọi bản lite đều chết.
-    "models/gemini-3.6-flash",
+    "models/gemini-3.1-flash-lite",
+    "models/gemini-3.5-flash",
+    "models/gemini-3.7-flash",
 ]
+
+MAX_IMAGE_SIDE = 1024
 
 # ==========================================
 # Ngân sách thời gian (giây)
 # ==========================================
-# BTC yêu cầu: Dạng 1 & 3 < 3s, Dạng 2 < 10s.
-# Đo được trên T4: Dạng 1 = 33ms, Dạng 2 = 8041ms.
-VLM_CALL_TIMEOUT = float(os.getenv("AIC_VLM_TIMEOUT", 10.0))
+# Đêm thi KHÔNG tính thời gian (4 lượt nộp trong 3 tiếng) và file nộp sinh
+# offline, nên mặc định ưu tiên ĐÚNG hơn NHANH.
+#
+# Vẫn phải có trần cứng: bug cũ để answer_qa chạy 123s dù deadline đặt 9s.
+# Bất biến bắt buộc: VLM_CALL_TIMEOUT * (số model client thử) <= QA_DEADLINE.
+# Sai dấu bất biến này thì model đầu treo hết deadline, cf.wait trả rỗng, và
+# TOÀN BỘ 100 dòng ăn DEFAULT_ANSWER - đúng ca 4/4 file Q&A hỏng ở Đợt 1.
+VLM_CALL_TIMEOUT = float(os.getenv("AIC_VLM_CALL_TIMEOUT", 25.0))
+QA_DEADLINE = float(os.getenv("AIC_QA_DEADLINE", 300.0))
+QA_N_VLM_CALLS = int(os.getenv("AIC_QA_N_VLM_CALLS", 0))   # 0 = hỏi HẾT các nhóm
 
-# Trần tuyệt đối cho answer_qa. Để dưới 10s và chừa chỗ cho retrieval + rerank.
-QA_DEADLINE = float(os.getenv("AIC_QA_DEADLINE", 8.0))
+# Profile live, chỉ dùng nếu vòng sau BTC đổi luật và bấm giờ trở lại.
+VLM_CALL_TIMEOUT_LIVE = float(os.getenv("AIC_VLM_CALL_TIMEOUT_LIVE", 2.5))
+QA_DEADLINE_LIVE = float(os.getenv("AIC_QA_DEADLINE_LIVE", 8.0))
+QA_N_VLM_CALLS_LIVE = int(os.getenv("AIC_QA_N_VLM_CALLS_LIVE", 5))
 
 # Giới hạn burst để né rate limit 429.
 QA_MAX_WORKERS = int(os.getenv("AIC_QA_WORKERS", 3))
-
-# Số nhóm video được hỏi VLM thật. Đã tune trên devset: 5 cho 4 answer khác
-# nhau; 10 thì chạm deadline và mọi dòng ăn cùng một fallback (tệ hơn).
-QA_N_VLM_CALLS = int(os.getenv("AIC_QA_N_CALLS", 5))
 
 # Số keyframe lân cận mỗi bên gửi kèm cho VLM. 0 = chỉ 1 ảnh; đo được ngang
 # 3 ảnh về độ chính xác (90%) nhưng nhanh và ít timeout hơn.
