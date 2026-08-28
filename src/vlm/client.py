@@ -9,7 +9,7 @@ trong lúc phát triển, và cách xử lý:
 | 503 UNAVAILABLE | Model mới quá tải | Fallback lần lượt qua nhiều model |
 | Trả rỗng, 26–78s | Thinking ăn hết max_output_tokens | Nới lên 512 token |
 | Timeout không có tác dụng | `http_options.timeout` không chặn được | Hard timeout bằng thread |
-| 429 RESOURCE_EXHAUSTED | Burst vượt RPM free tier | Xoay vòng nhiều key + nghỉ 2s |
+| 429 RESOURCE_EXHAUSTED | Burst vượt RPM free tier | Bám 1 key, lùi lại thử lại, cooldown khi cạn |
 | "client has been closed" | Đóng executor kéo theo dọn HTTP client | Executor dùng chung, không đóng |
 """
 
@@ -21,15 +21,18 @@ import json
 import logging
 import os
 import re
+import threading
 import time
-from itertools import cycle
-from typing import Any, Iterator
+from typing import Any
 
 from PIL import Image
 
 from src.common.config import (
+    GEMINI_KEY_COOLDOWN_S,
     GEMINI_KEY_ENV_NAMES,
+    GEMINI_MIN_INTERVAL_S,
     GEMINI_MODELS,
+    GEMINI_RETRY_ON_429,
     VLM_CALL_TIMEOUT,
 )
 
@@ -38,10 +41,21 @@ logger = logging.getLogger(__name__)
 DEFAULT_ANSWER = "khong ro"
 MAX_IMAGE_SIDE = 448          # hạ cạnh dài: giảm mạnh token ảnh và latency
 
-_key_cycle: Iterator[str] | None = None
+# Quản lý Key & Rate Limit
+_keys: list[str] = []
+_key_idx: int = 0
+_dead_keys: set[int] = set()
+_cooldown_until: dict[int, float] = {}
+_key_lock = threading.Lock()
+_last_call_at: float = 0.0
+_rate_lock = threading.Lock()
+
 _clients: dict[str, Any] = {}
 _active_models: list[str] | None = None
 _executor: cf.ThreadPoolExecutor | None = None
+
+# Định nghĩa các Exception mã lỗi HTTP để phân loại trong call_gemini
+CODE_ERRORS = (SyntaxError, IndentationError, NameError, TypeError)
 
 
 def _load_keys() -> list[str]:
@@ -61,27 +75,92 @@ def _load_keys() -> list[str]:
 
     if not keys:
         raise RuntimeError(
-            f"Không tìm thấy Gemini API key. Đặt một trong: {GEMINI_KEY_ENV_NAMES[:3]}")
+            f"Không tìm thấy Gemini API key. Đặt một trong: {GEMINI_KEY_ENV_NAMES[:3]}"
+        )
     logger.info("Nạp %d Gemini key (≈%dx quota)", len(keys), len(keys))
     return keys
 
 
 def _client():
-    """Client tiếp theo trong vòng xoay key — né rate limit 429.
+    """Client của key ĐANG dùng. Không xoay vòng.
 
-    Free tier tính quota theo từng project, nên mỗi thành viên góp 1 key là
-    nhân hạn mức lên bấy nhiêu lần.
+    Bản cũ gọi `next(_key_cycle)` ở mọi request, tức mỗi call một project khác
+    nhau theo vòng tròn, với lý do ghi thẳng trong docstring là "né rate limit
+    429". Đó là hành vi Acceptable Use Policy cấm, và một project của nhóm đã
+    bị đình chỉ vì "repeated Terms of Service violations".
+
+    Cách đúng: bám một key tới khi nó THẬT SỰ cạn quota (429 nhiều lần liên
+    tiếp), rồi mới cho nó nghỉ và chuyển sang key khác. Nhiều key là để chia
+    tải, không phải để lách giới hạn.
     """
-    global _key_cycle
+    global _keys
     from google import genai
 
-    if _key_cycle is None:
-        _key_cycle = cycle(_load_keys())
+    if not _keys:
+        _keys = _load_keys()
 
-    key = next(_key_cycle)
+    key = _keys[_key_idx]
     if key not in _clients:
         _clients[key] = genai.Client(api_key=key)
     return _clients[key]
+
+
+def _rotate_key(reason: str) -> bool:
+    """Chuyển sang key còn sống tiếp theo. Trả False nếu không còn key nào."""
+    global _key_idx
+    with _key_lock:
+        now = time.monotonic()
+        for offset in range(1, len(_keys) + 1):
+            i = (_key_idx + offset) % len(_keys)
+            if i in _dead_keys or _cooldown_until.get(i, 0.0) > now:
+                continue
+            logger.warning(
+                "Đổi key: ...%s -> ...%s (%s)",
+                _keys[_key_idx][-6:],
+                _keys[i][-6:],
+                reason,
+            )
+            _key_idx = i
+            return True
+    logger.error("Mọi key đều chết hoặc đang nghỉ (%s)", reason)
+    return False
+
+
+def _mark_dead(reason: str) -> None:
+    """Đánh dấu key hiện tại hỏng vĩnh viễn (401 / project bị đình chỉ)."""
+    _dead_keys.add(_key_idx)
+    logger.error(
+        "KEY CHẾT ...%s (%s). Còn %d/%d key.",
+        _keys[_key_idx][-6:],
+        reason,
+        len(_keys) - len(_dead_keys),
+        len(_keys),
+    )
+
+
+def _mark_exhausted() -> None:
+    """Cho key hiện tại nghỉ sau khi cạn quota — 429 là tạm thời, không vĩnh viễn."""
+    _cooldown_until[_key_idx] = time.monotonic() + GEMINI_KEY_COOLDOWN_S
+    logger.warning(
+        "Key ...%s cạn quota, nghỉ %.0fs",
+        _keys[_key_idx][-6:],
+        GEMINI_KEY_COOLDOWN_S,
+    )
+
+
+def _rate_limit() -> None:
+    """Giới hạn nhịp toàn tiến trình. Mọi lời gọi Gemini đều đi qua đây.
+
+    Burst là thứ bị gắn cờ, không phải tổng lượng. Stage B từng bắn 10 lô × 10
+    ảnh cùng lúc; nhịp đều đặn an toàn hơn nhiều mà đêm thi không mất gì vì
+    không ai bấm giờ.
+    """
+    global _last_call_at
+    with _rate_lock:
+        wait = GEMINI_MIN_INTERVAL_S - (time.monotonic() - _last_call_at)
+        if wait > 0:
+            time.sleep(wait)
+        _last_call_at = time.monotonic()
 
 
 def _get_executor() -> cf.ThreadPoolExecutor:
@@ -115,11 +194,13 @@ def probe_models(candidates: list[str] | None = None) -> list[str]:
     for m in candidates or GEMINI_MODELS:
         try:
             r = _client().models.generate_content(
-                model=m, contents=["ping"],
+                model=m,
+                contents=["ping"],
                 # 512 chứ không phải 16: model mới dành phần lớn token đầu cho
                 # thinking, ping với trần 16 token trả về rỗng và bị loại oan.
                 # Đây là lý do gemini-3.6-flash không bao giờ lọt qua probe.
-                config=types.GenerateContentConfig(max_output_tokens=512))
+                config=types.GenerateContentConfig(max_output_tokens=512),
+            )
             if r.text:
                 alive.append(m)
                 logger.info("model OK: %s", m)
@@ -128,7 +209,9 @@ def probe_models(candidates: list[str] | None = None) -> list[str]:
                 # im lặng - không có log thì không ai biết model bị gạch tên.
                 logger.warning("model loại vì trả rỗng: %s", m)
         except Exception as exc:
-            logger.warning("model hỏng: %s (%s: %s)", m, type(exc).__name__, str(exc)[:80])
+            logger.warning(
+                "model hỏng: %s (%s: %s)", m, type(exc).__name__, str(exc)[:80]
+            )
 
     if not alive:
         logger.error("Không model Gemini nào khả dụng!")
@@ -161,17 +244,25 @@ def _one_call(model: str, contents: list, timeout_s: float) -> str:
     """
     from google.genai import types
 
+    _rate_limit()  # ← giữ nhịp trước khi bắn
+
     cfg = types.GenerateContentConfig(temperature=0.0, max_output_tokens=512)
     fut = _get_executor().submit(
         _client().models.generate_content,
-        model=model, contents=contents, config=cfg)
+        model=model,
+        contents=contents,
+        config=cfg,
+    )
     resp = fut.result(timeout=timeout_s)
     return (resp.text or "").strip()
 
 
-def call_gemini(prompt: str, images: list[Image.Image] | None = None,
-                timeout_s: float = VLM_CALL_TIMEOUT,
-                max_side: int = MAX_IMAGE_SIDE) -> str:
+def call_gemini(
+    prompt: str,
+    images: list[Image.Image] | None = None,
+    timeout_s: float = VLM_CALL_TIMEOUT,
+    max_side: int = MAX_IMAGE_SIDE,
+) -> str:
     """Gọi Gemini với ảnh tuỳ chọn, thử lần lượt các model khả dụng.
 
     Args:
@@ -182,21 +273,43 @@ def call_gemini(prompt: str, images: list[Image.Image] | None = None,
 
     Returns:
         Chuỗi phản hồi, hoặc **chuỗi rỗng** nếu mọi model đều hỏng.
-        KHÔNG BAO GIỜ raise.
+        KHÔNG BAO GIỜ raise ngoại trừ các lỗi hệ thống code.
     """
     contents: list[Any] = [_to_part(im, max_side=max_side) for im in (images or [])] + [prompt]
 
     for model in (_active_models or GEMINI_MODELS):
-        try:
-            if out := _one_call(model, contents, timeout_s):
-                return out
-        except cf.TimeoutError:
-            logger.warning("timeout %.1fs: %s", timeout_s, model)
-        except Exception as exc:
-            msg = str(exc)
-            logger.warning("%s: %s: %s", model, type(exc).__name__, msg[:120])
-            if "429" in msg or "RESOURCE_EXHAUSTED" in msg:
-                time.sleep(2.0)
+        backoff = 2.0
+        for attempt in range(GEMINI_RETRY_ON_429):
+            try:
+                if out := _one_call(model, contents, timeout_s):
+                    return out
+                break  # trả rỗng: thử model khác
+            except cf.TimeoutError:
+                logger.warning("timeout %.1fs: %s", timeout_s, model)
+                break
+            except CODE_ERRORS:
+                raise  # lỗi code phải nổ, không nuốt
+            except Exception as exc:
+                msg = str(exc)
+                if "401" in msg or "UNAUTHENTICATED" in msg:
+                    _mark_dead("401 UNAUTHENTICATED")
+                    if not _rotate_key("key chết"):
+                        return ""
+                    continue
+                if "429" in msg or "RESOURCE_EXHAUSTED" in msg:
+                    # Lùi lại trên CÙNG key trước đã. Nhảy key ngay khi gặp 429
+                    # chính là hành vi làm project bị đình chỉ.
+                    if attempt < GEMINI_RETRY_ON_429 - 1:
+                        logger.info("429, nghỉ %.0fs rồi thử lại cùng key", backoff)
+                        time.sleep(backoff)
+                        backoff *= 2
+                        continue
+                    _mark_exhausted()
+                    if not _rotate_key("cạn quota"):
+                        return ""
+                    continue
+                logger.warning("%s: %s: %s", model, type(exc).__name__, msg[:120])
+                break
     return ""
 
 

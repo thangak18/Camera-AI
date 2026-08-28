@@ -104,6 +104,17 @@ def resolve_device() -> str:
 # Đặt qua biến môi trường hoặc Colab Secrets.
 GEMINI_KEY_ENV_NAMES = ["GEMINI_API_KEY"] + [f"GEMINI_KEY_{i}" for i in range(2, 11)]
 
+# Nhịp gọi Gemini tối thiểu giữa hai request (giây). Đêm thi không tính thời
+# gian nên chậm không tốn gì, đổi lại tránh burst - thứ đã làm một project bị
+# đình chỉ vì "repeated Terms of Service violations".
+GEMINI_MIN_INTERVAL_S = float(os.getenv("AIC_GEMINI_MIN_INTERVAL", 0.7))
+
+# Số lần thử lại trên CÙNG key khi gặp 429 trước khi chịu thua và chuyển key.
+GEMINI_RETRY_ON_429 = int(os.getenv("AIC_GEMINI_RETRY_429", 3))
+
+# Thời gian nghỉ của một key sau khi nó cạn quota (giây).
+GEMINI_KEY_COOLDOWN_S = float(os.getenv("AIC_GEMINI_KEY_COOLDOWN", 60.0))
+
 # Google deprecate model liên tục (đã dính 404 giữa lúc phát triển). Đây là thứ
 # tự ưu tiên, hỏng thì nhảy sang cái kế. Chạy `vlm.client.probe_models()` lúc
 # khởi động API để dò cái nào còn sống.
