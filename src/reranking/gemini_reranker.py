@@ -28,12 +28,14 @@ import concurrent.futures as cf
 import json
 import logging
 import re
+import time
 from collections import OrderedDict
 from typing import Any, Sequence
 
 from PIL import Image
 
-from src.common.config import KEYFRAMES_DIR, RERANK_MIN_COVERAGE, VLM_CALL_TIMEOUT
+from src.common.config import (KEYFRAMES_DIR, RERANK_MIN_COVERAGE,
+                               STAGE_B_DEADLINE, VLM_CALL_TIMEOUT)
 from src.common.frame_utils import keyframe_path
 from src.vlm.client import call_gemini
 
@@ -142,25 +144,35 @@ def parse_scores(raw: str, n: int) -> dict[int, float]:
 
 
 def _score_batch(query_vi: str, batch: list[tuple[str, Image.Image]],
-                 timeout_s: float) -> dict[str, float]:
+                 timeout_s: float,
+                 deadline: float | None = None) -> dict[str, float]:
     """Chấm một lô ảnh đại diện. Trả `{video_id: điểm}` hoặc `{frame_id: điểm}`."""
     imgs = [im for _, im in batch]
     raw = call_gemini(PROMPT_RERANK.format(query=query_vi, n=len(imgs)),
                       images=imgs, timeout_s=timeout_s,
-                      max_side=RERANK_MAX_SIDE)
+                      max_side=RERANK_MAX_SIDE, deadline=deadline)
     local = parse_scores(raw, len(imgs))
     return {batch[i - 1][0]: s for i, s in local.items()}
 
 
 def _rescore_frames(query_vi: str, groups: OrderedDict, ordered_vids: list[str],
-                    n_videos: int, batch_size: int, timeout_s: float) -> None:
+                    n_videos: int, batch_size: int, timeout_s: float,
+                    deadline: float | None = None) -> None:
     """Chấm lại FRAME trong vài video đứng đầu, sắp xếp tại chỗ.
     Chấm ở mức video không đụng tới thứ tự frame BÊN TRONG một video. Câu p1-10
     Đợt 1 rơi đúng ca đó: video đúng đã hạng 1, mười dòng đầu đều thuộc nó,
     nhưng ground truth là frame thứ 4 — mất R@1 mà Stage B mức video không cứu
     được. Một lô 10 ảnh cho video hạng nhất là đủ.
+
+    Chạy TUẦN TỰ, nên bắt buộc phải soi `deadline` trước mỗi video: đây là
+    khâu đã biến một truy vấn KIS thành ~2 phút khi Gemini 503 — lô chính đã
+    timeout xong nó vẫn thản nhiên gọi tiếp hai lượt nữa.
     """
     for vid in ordered_vids[:n_videos]:
+        if deadline is not None and time.monotonic() >= deadline:
+            logger.warning("Stage B: hết ngân sách trước khi chấm lại frame — "
+                           "giữ thứ tự frame của Stage A.")
+            return
         cs = groups[vid]
         if len(cs) < 2:
             continue
@@ -170,7 +182,7 @@ def _rescore_frames(query_vi: str, groups: OrderedDict, ordered_vids: list[str],
                 batch.append((c["frame_id"], img))
         if len(batch) < 2:
             continue
-        raw_scores = _score_batch(query_vi, batch, timeout_s)
+        raw_scores = _score_batch(query_vi, batch, timeout_s, deadline)
         if not raw_scores:
             continue
         order = {fid: i for i, fid in enumerate(
@@ -183,7 +195,8 @@ def gemini_rerank(query_vi: str, candidates: Sequence[Any],
                   batch_size: int = BATCH_SIZE,
                   weight: float = 1.0,
                   rescore_top_videos: int = 2,
-                  timeout_s: float = VLM_CALL_TIMEOUT) -> list[dict]:
+                  timeout_s: float = VLM_CALL_TIMEOUT,
+                  deadline: float | None = None) -> list[dict]:
     """Chấm lại candidate bằng Gemini ở mức video, hợp nhất với thứ hạng cũ.
 
     Args:
@@ -193,7 +206,11 @@ def gemini_rerank(query_vi: str, candidates: Sequence[Any],
         batch_size: Số ảnh mỗi lần gọi Gemini.
         weight: Trọng số Gemini trong RRF. 1.0 = ngang Stage A; 0 = tắt hẳn.
         rescore_top_videos: Số video hàng đầu cần chấm lại từng frame bên trong.
-        timeout_s: Trần mỗi lần gọi.
+        timeout_s: Trần mỗi lần gọi Gemini.
+        deadline: Mốc `time.monotonic()` tuyệt đối cho TOÀN BỘ Stage B của
+            truy vấn này. None → `now + STAGE_B_DEADLINE`. Hết giờ ở bất kỳ
+            khâu nào thì trả về thứ tự Stage A — Stage B là thứ làm-tốt-thêm,
+            nên nó phải là bên chịu cắt khi ngân sách cạn.
 
     Returns:
         Danh sách dict đã sắp xếp lại, **giữ nguyên số phần tử** đầu vào —
@@ -203,6 +220,9 @@ def gemini_rerank(query_vi: str, candidates: Sequence[Any],
     items = [_as_dict(c) for c in candidates]
     if not items or weight <= 0:
         return items
+
+    if deadline is None:
+        deadline = time.monotonic() + STAGE_B_DEADLINE
 
     # Gom theo video, giữ thứ tự hạng. Đại diện = candidate hạng cao nhất.
     groups: OrderedDict[str, list[dict]] = OrderedDict()
@@ -227,9 +247,13 @@ def gemini_rerank(query_vi: str, candidates: Sequence[Any],
     scores: dict[str, float] = {}
 
     ex = _get_rerank_executor()
-    futs = [ex.submit(_score_batch, query_vi, b, timeout_s) for b in batches]
+    futs = [ex.submit(_score_batch, query_vi, b, timeout_s, deadline)
+            for b in batches]
     try:
-        for f in cf.as_completed(futs, timeout=timeout_s * 3):
+        # Trần là ngân sách CÒN LẠI, không phải `timeout_s * 3`: con số cũ
+        # (75s) độc lập với mọi thứ khác nên tổ hợp không có trần nào cả.
+        # Chừa lại một phần cho khâu chấm lại frame phía sau.
+        for f in cf.as_completed(futs, timeout=max(0.0, deadline - time.monotonic())):
             try:
                 scores.update(f.result())
             except Exception as exc:
@@ -261,6 +285,7 @@ def gemini_rerank(query_vi: str, candidates: Sequence[Any],
     
     if rescore_top_videos > 0:
         _rescore_frames(query_vi, groups, ordered_vids, rescore_top_videos,
-                        batch_size, timeout_s)
-                        
+                        batch_size, timeout_s, deadline)
+
+
     return [c for vid in ordered_vids for c in groups[vid]]

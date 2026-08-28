@@ -15,8 +15,15 @@ function App() {
       let endpoint = '';
       let body = {};
       
-      // Update this URL whenever Kaggle restarts and gives a new Localtunnel link
-      const API_BASE_URL = "https://small-lines-sip.loca.lt/";
+      // Doc tu bien moi truong, KHONG ghi cung. Localtunnel doi ten moi lan
+      // Kaggle khoi dong lai, ban cu bat sua code + rebuild moi lan nhu vay.
+      // Dat trong frontend/.env.local:  VITE_API_BASE_URL=https://xxx.loca.lt
+      // replace(/\/+$/, ""): bo dau "/" cuoi. Khong bo thi endpoint thanh
+      // "https://host//search/kis" - hai dau gach, va FastAPI khong khop route
+      // do nen tra 404.
+      const API_BASE_URL = (
+        import.meta.env.VITE_API_BASE_URL || "http://localhost:8000"
+      ).replace(/\/+$/, "");
 
       if (activeTab === 'kis') {
         endpoint = `${API_BASE_URL}/search/kis`;

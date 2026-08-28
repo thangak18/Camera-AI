@@ -34,6 +34,7 @@ import concurrent.futures as cf
 import json
 import logging
 import re
+import time
 from collections import Counter, OrderedDict
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -261,7 +262,8 @@ def interleave_by_video(groups: "OrderedDict[str, list[dict]]") -> list[dict]:
 
 def ask_one(question_vi: str, video_id: str, ns: Sequence[int],
             ask_frame: bool = True,
-            call_timeout_s: float | None = None) -> tuple[str, float, int | None]:
+            call_timeout_s: float | None = None,
+            deadline: float | None = None) -> tuple[str, float, int | None]:
     """Hỏi VLM về một nhóm keyframe cùng video.
 
     Returns:
@@ -278,7 +280,13 @@ def ask_one(question_vi: str, video_id: str, ns: Sequence[int],
     else:
         prompt = PROMPT_QA.format(question=question_vi)
 
-    kwargs = {} if call_timeout_s is None else {"timeout_s": call_timeout_s}
+    # Chỉ đưa vào kwargs khi có giá trị: `VLM_BACKEND` là điểm cắm thay được
+    # (Qwen2-VL local nếu Gemini chết), backend khác có thể không nhận hết.
+    kwargs = {}
+    if call_timeout_s is not None:
+        kwargs["timeout_s"] = call_timeout_s
+    if deadline is not None:
+        kwargs["deadline"] = deadline
     raw = VLM_BACKEND(prompt, images=imgs, **kwargs)
     answer, conf = parse_answer(raw)
     best_n = parse_frame(raw, got) if ask_frame else None
@@ -323,6 +331,11 @@ def answer_qa(question_vi: str, candidates: Sequence[Any],
     if call_timeout_s is None:
         call_timeout_s = max(1.0, min(VLM_CALL_TIMEOUT, deadline_s / 3))
 
+    # Mốc tuyệt đối, truyền xuống tận `call_gemini`. Không có nó thì mỗi lệnh
+    # gọi chỉ biết trần của RIÊNG nó: `cf.wait` bên dưới hết giờ nhưng các
+    # future vẫn đang chạy và vẫn tiếp tục đốt thời gian của tiến trình.
+    deadline_at = time.monotonic() + deadline_s
+
     groups: OrderedDict[str, list[dict]] = OrderedDict()
     for c in items:
         groups.setdefault(c["video_id"], []).append(c)
@@ -345,9 +358,9 @@ def answer_qa(question_vi: str, candidates: Sequence[Any],
                                "Kiểm tra payload Qdrant.", vid)
                 continue
             futs[ex.submit(ask_one, question_vi, vid, ns, ask_frame,
-                           call_timeout_s)] = vid
+                           call_timeout_s, deadline_at)] = vid
 
-        done, not_done = cf.wait(futs, timeout=deadline_s)
+        done, not_done = cf.wait(futs, timeout=max(0.0, deadline_at - time.monotonic()))
         for f in done:
             try:
                 answer, _, best_n = f.result()

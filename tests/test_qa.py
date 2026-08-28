@@ -168,6 +168,46 @@ def test_degradation() -> None:
     check("thiếu 'n' → answer = khong ro", rows and rows[0]["answer"] == DEFAULT_ANSWER, rows[0]["answer"] if rows else "")
 
 
+def test_profiles() -> None:
+    """Bất biến ngân sách phải đúng ở CẢ HAI profile, không riêng offline.
+
+    Profile live từng chỉ tồn tại trên giấy: config có sẵn bộ hằng `*_LIVE` mà
+    không dòng code nào đọc, nên ai chạy uvicorn phục vụ vòng bấm giờ đều âm
+    thầm dùng ngân sách offline — Q&A tới 300s trong khi BTC cho 10s. Nay đổi
+    bằng AIC_PROFILE, và test này chốt cả hai.
+
+    Chạy trong tiến trình con vì config đọc env LÚC IMPORT, không đọc lại.
+    """
+    print("\n[10] hai profile ngân sách")
+    import os
+    import subprocess
+    import sys
+
+    code = ("from src.common.config import (PROFILE, VLM_CALL_TIMEOUT, "
+            "QA_DEADLINE, QA_N_VLM_CALLS, RERANK_STAGE_B); "
+            "print(PROFILE, VLM_CALL_TIMEOUT, QA_DEADLINE, QA_N_VLM_CALLS, "
+            "int(RERANK_STAGE_B))")
+    for want, n_calls, stage_b in (("offline", 0, 1), ("live", 5, 0)):
+        env = dict(os.environ, AIC_PROFILE=want, PYTHONIOENCODING="utf-8")
+        for k in ("AIC_VLM_CALL_TIMEOUT", "AIC_QA_DEADLINE",
+                  "AIC_QA_N_VLM_CALLS", "AIC_RERANK_STAGE_B"):
+            env.pop(k, None)
+        r = subprocess.run([sys.executable, "-c", code], env=env,
+                           capture_output=True, text=True)
+        out = r.stdout.split()
+        if len(out) != 5:
+            check(f"{want}: chạy được", False, r.stderr[-200:])
+            continue
+        prof, call_s, qa_s, calls, sb = (out[0], float(out[1]), float(out[2]),
+                                         int(out[3]), int(out[4]))
+        check(f"{want}: profile nhận đúng", prof == want, prof)
+        check(f"{want}: VLM_CALL_TIMEOUT*3 <= QA_DEADLINE",
+              call_s * 3 <= qa_s, f"{call_s}*3 > {qa_s}")
+        check(f"{want}: n_vlm_calls = {n_calls}", calls == n_calls, str(calls))
+        check(f"{want}: Stage B {'bật' if stage_b else 'tắt'}",
+              sb == stage_b, str(sb))
+
+
 def test_timeout_budget() -> None:
     print("\n[6] ngân sách thời gian")
     from src.common.config import QA_DEADLINE, VLM_CALL_TIMEOUT
@@ -248,6 +288,7 @@ def main() -> None:
     test_timeout_budget()
     test_many_groups()  # Test logic thuần không tốn API, chạy tốt offline
     test_frame_insert_is_real_frame_idx()
+    test_profiles()
 
     if args.offline:
         print("\n(bỏ qua phần gọi mạng)")
