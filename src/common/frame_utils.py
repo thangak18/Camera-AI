@@ -52,14 +52,24 @@ def to_real_frame_idx(video_id: str, frame_id: str | int) -> int:
         Frame index thật. Nếu không tra được, trả về `int(frame_id)` và ghi
         cảnh báo — thà nộp số sai còn hơn văng lỗi mất cả truy vấn.
     """
-    _load_map(video_id)
-
-    n = int(frame_id)
-    if (real := _map_cache[video_id].get(n)) is not None:
+    if (real := try_real_frame_idx(video_id, frame_id)) is not None:
         return real
 
     logger.warning("Không tra được frame_idx cho %s/%s", video_id, frame_id)
-    return n
+    return int(frame_id)
+
+
+def try_real_frame_idx(video_id: str, frame_id: str | int) -> int | None:
+    """Như `to_real_frame_idx` nhưng trả None thay vì đoán bừa khi tra trượt.
+
+    Dùng ở chỗ **chèn thêm** một dòng vào bài nộp (vd `qa.reorder_by_frame()`
+    khi VLM chỉ ra một keyframe không nằm trong candidate). Ở đó fallback
+    `int(frame_id)` là có hại chứ không phải an toàn: BTC so khớp số nguyên với
+    `map_keyframes`, nộp một số không có trong bảng thì dòng đó chắc chắn 0
+    điểm mà vẫn chiếm mất một chỗ trong 100 dòng — trong khi bỏ hẳn dòng đó chỉ
+    mất đúng một cơ hội đoán.
+    """
+    return _load_map(video_id).get(int(frame_id))
 
 
 def _load_map(video_id: str) -> dict[int, int]:

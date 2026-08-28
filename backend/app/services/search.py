@@ -9,7 +9,8 @@ from src.common.schemas import SearchResult, QAResponse, TrakeResponse
 from src.trake.solver import solve_trake
 from src.common.frame_utils import all_frame_idx
 from src.TextualKIS.searcher import TextualKISSearcher
-from src.reranking import rerank
+from src.reranking import rerank, gemini_rerank
+from src.common.config import RERANK_STAGE_B
 from src.vlm import answer_qa
 
 # Khởi tạo searcher 1 lần (Global Singleton) để không tạo lại connection Qdrant/ES liên tục
@@ -65,7 +66,25 @@ def _diversify_by_time(results: List[SearchResult], top_k: int,
     return (kept + dropped)[:top_k]
 
 
-def perform_kis_search(query: str, top_k: int) -> List[SearchResult]:
+def _apply_stage_b(query_vi: str, ranked: List[dict], top_k: int,
+                   stage_b: bool | None) -> List[dict]:
+    """Chấm lại bằng Gemini (Stage B) nếu được bật.
+
+    ⚠️ Truyền `query_vi` — TIẾNG VIỆT GỐC của BTC, KHÔNG phải `query_en` mà
+    Stage A dùng. Hai tầng nhận hai ngôn ngữ khác nhau: SigLIP đo được Final
+    Score 0.000 với query Việt thô, còn Gemini đọc tiếng Việt tốt hơn hẳn bản
+    dịch máy (xem docstring `gemini_reranker.py`).
+
+    `gemini_rerank` không bao giờ raise và giữ nguyên số phần tử; mọi đường lỗi
+    trả về đúng thứ tự Stage A, nên ở đây không cần try/except riêng.
+    """
+    if not (RERANK_STAGE_B if stage_b is None else stage_b):
+        return ranked
+    return gemini_rerank(query_vi, ranked)[:top_k]
+
+
+def perform_kis_search(query: str, top_k: int,
+                       stage_b: bool | None = None) -> List[SearchResult]:
     """
     Textual KIS search using Hybrid Search (Qdrant + ES RRF) and SigLIP Reranking
     """
@@ -74,12 +93,16 @@ def perform_kis_search(query: str, top_k: int) -> List[SearchResult]:
     # chỉ còn <100 dòng, tức tự bỏ phí lượt đoán thay vì đổi lấy video mới.
     response = searcher.search(query, top_k=top_k * 5)
     diversified = _diversify_by_time(response.results, top_k)
+    # Stage A trước Stage B, KHÔNG bỏ qua dù nó là no-op: Stage B hợp nhất bằng
+    # RRF trên thứ hạng Stage A, tức vẫn cần một thứ hạng nền để tie-break.
     ranked = rerank(response.query_en, diversified, top_k=top_k)
+    ranked = _apply_stage_b(query, ranked, top_k, stage_b)
     return [SearchResult(**c) for c in ranked]
 
 def perform_qa_search(description: str, question: str, top_k: int,
                       n_vlm_calls: int | None = None,
-                      deadline: float | None = None) -> List[QAResponse]:
+                      deadline: float | None = None,
+                      stage_b: bool | None = None) -> List[QAResponse]:
     """
     Q&A Search.
     Step 1: Retrieve top frames based on description (or question if empty).
@@ -92,6 +115,10 @@ def perform_qa_search(description: str, question: str, top_k: int,
     desc = description if description else question
     kis_response = searcher.search(desc, top_k=top_k)
     ranked = rerank(kis_response.query_en, kis_response.results, top_k=top_k)
+    # Stage B càng đáng giá ở Dạng 2: `answer_qa` lan truyền answer theo
+    # video_id và chỉ 5 dòng đầu ăn R@1/R@5, nên đẩy đúng VIDEO lên đầu quan
+    # trọng hơn cả việc trả lời đúng.
+    ranked = _apply_stage_b(desc, ranked, top_k, stage_b)
 
     extra = {}
     if n_vlm_calls is not None:

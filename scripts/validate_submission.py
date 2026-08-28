@@ -31,7 +31,6 @@ import zipfile
 from collections import Counter
 
 VIDEO_RE = re.compile(r"^[A-Z]\d+_V\d+$")
-EVENT_RE = re.compile(r"^E\d+:")
 MAX_ROWS = 100
 MAX_ANSWER_LEN = 100
 DEFAULT_ANSWER = "khong ro"
@@ -61,10 +60,13 @@ def load_valid_frames(map_dir: str, video_id: str, cache: dict) -> set[str] | No
 
 
 def expected_events(query_dir: str, basename: str) -> int | None:
-    """Số event yêu cầu, đếm theo các dòng khớp 'E<số>:' trong file đề.
+    """Số event yêu cầu = số DÒNG KHÔNG RỖNG trong file đề.
 
-    Đếm theo regex chứ không theo số dòng: đề thật đã có ca đánh nhầm nhãn
-    (query-p1-18 ghi E2 hai lần, không có E3) — vẫn phải ra đúng 4 event.
+    Đếm theo dòng chứ không theo nhãn 'E<số>': log chấm của BTC ở đợt 1 báo
+    query-p1-16-trake "Expected 4 frame IDs, got 3" trong khi file chỉ có nhãn
+    E1..E3 — dòng mô tả cảnh mở đầu (không nhãn) cũng được tính là 1 event.
+    Đếm theo nhãn còn hỏng ở ca đánh nhầm nhãn (query-p1-18 đợt thử nghiệm ghi
+    E2 hai lần, không có E3).
     """
     if not query_dir:
         return None
@@ -72,7 +74,7 @@ def expected_events(query_dir: str, basename: str) -> int | None:
     if not os.path.exists(path):
         return None
     with open(path, encoding="utf-8") as fh:
-        return sum(1 for line in fh if EVENT_RE.match(line.strip()))
+        return sum(1 for line in fh if line.strip())
 
 
 def check_file(name: str, raw: bytes, qtype: str, basename: str,
