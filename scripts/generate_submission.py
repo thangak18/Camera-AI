@@ -13,10 +13,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 # src/common/frame_utils.to_real_frame_idx() giả định frame_id là số thứ tự
 # keyframe ("n") và tra map_keyframes/<video_id>.csv để đổi sang frame_idx thật.
-# Nhưng qdrant_loader.py (src/ingestion/qdrant_loader.py:116) đã gán thẳng
+# Nhưng qdrant_loader.py (src/ingestion/qdrant_loader.py:126) đã gán thẳng
 # frame_id = frame_idx ngay lúc nạp Qdrant, nên frame_id trả về từ API ĐÃ LÀ
 # frame thật - gọi hàm đó luôn tra "n" trật (vì input không phải n), fallback về
 # int(frame_id) không đổi - tốn IO đọc CSV + spam warning mà không đổi được gì.
+#
+# BẤT BIẾN cả hệ phải giữ: mọi frame_id đi ra khỏi API đều là frame_idx THẬT.
+# Nơi duy nhất từng phá bất biến này là qa.reorder_by_frame() - nó chèn thêm
+# dòng cho frame mà VLM chỉ ra, trước đây ghi "n" zero-pad; đã sửa để tự tra
+# map_keyframes trước khi trả về. Đừng khôi phục việc convert ở đây: convert
+# hai lần cũng cho 0 điểm y như không convert.
 def to_real_frame_idx(video_id: str, frame_id) -> int:
     return int(frame_id)
 
@@ -66,11 +72,13 @@ def process_and_write_results(q_type: str, query_data, api_url: str, output_csv:
                 
             res = requests.post(
                 f"{api_url}/search/qa", 
-                # Chạy offline, không ai bấm giờ -> hỏi VLM nhiều nhóm video hơn
-                # hẳn mặc định 5. 40 nhóm phủ gần hết (query nhiều nhóm nhất trên
-                # đề thử nghiệm có 61), deadline 300s đủ chỗ cho 40 lượt gọi.
-                json={"description": description, "question": question, "top_k": 100,
-                      "n_vlm_calls": 40, "deadline": 300.0},
+                # KHÔNG truyền n_vlm_calls/deadline nữa: config.py đã đổi mặc
+                # định sang profile offline (QA_N_VLM_CALLS=0 = hỏi HẾT các nhóm,
+                # QA_DEADLINE=300s). Bản cũ gửi cứng 40 nhóm - con số đó từng là
+                # nâng cấp so với mặc định 5, nay lại là HẠ CẤP so với mặc định 0
+                # và âm thầm cắt bớt nhóm được hỏi. Để config làm nguồn sự thật
+                # duy nhất, đổi profile bằng biến môi trường ở phía server.
+                json={"description": description, "question": question, "top_k": 100},
                 headers=headers
             )
             res.raise_for_status()

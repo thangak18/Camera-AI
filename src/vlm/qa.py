@@ -48,7 +48,7 @@ from src.common.config import (
     SUBMISSION_ROWS,
     VLM_CALL_TIMEOUT,
 )
-from src.common.frame_utils import keyframe_path
+from src.common.frame_utils import keyframe_path, try_real_frame_idx
 from src.vlm.client import DEFAULT_ANSWER, call_gemini, parse_answer
 
 logger = logging.getLogger(__name__)
@@ -214,15 +214,31 @@ def reorder_by_frame(cs: list[dict], best_n: int | None) -> list[dict]:
     ngoài cửa sổ; nếu một trong hai đứng đầu nhóm thì câu đó mất điểm dù answer
     đã đúng.
 
-    `best_n` không trùng candidate nào thì chèn thêm một dòng cho chính nó —
-    ảnh đó có thật trên đĩa và `to_real_frame_idx()` tra được, nên hợp lệ.
+    `best_n` không trùng candidate nào thì chèn thêm một dòng cho chính nó.
+
+    ⚠️ `frame_id` của dòng chèn phải là **frame_idx THẬT**, không phải `best_n`
+    zero-pad. `best_n` là số thứ tự keyframe (`n`); mọi candidate đi qua đây đều
+    đã mang frame_idx thật trong `frame_id` (payload Qdrant gán sẵn) và
+    `scripts/generate_submission.py` ghi thẳng ra CSV không convert nữa. Trộn
+    hai hệ số vào cùng một cột là đúng nhóm lỗi đã cho 0.00 tuyệt đối ở Đợt 1 —
+    tệ hơn nữa vì dòng chèn nằm ở ĐẦU nhóm, tức chiếm đúng chỗ dễ ăn R@1 nhất.
+
+    Tra trượt `map_keyframes` thì **không chèn**: dòng sai chắc chắn 0 điểm mà
+    vẫn tốn một chỗ, còn thứ tự đã sắp theo khoảng cách tới `best_n` vẫn giữ
+    được phần lớn giá trị của việc VLM chỉ frame.
     """
     if best_n is None or not cs:
         return cs
     ranked = sorted(cs, key=lambda c: abs(int(c["n"]) - best_n)
                     if c.get("n") is not None else 10 ** 9)
     if not any(c.get("n") is not None and int(c["n"]) == best_n for c in ranked):
-        ranked.insert(0, {**ranked[0], "frame_id": f"{best_n:03d}", "n": best_n})
+        real = try_real_frame_idx(ranked[0]["video_id"], best_n)
+        if real is None:
+            logger.warning("VLM chỉ n=%d của %s nhưng map_keyframes không có — "
+                           "bỏ dòng chèn, chỉ sắp lại thứ tự.",
+                           best_n, ranked[0]["video_id"])
+        else:
+            ranked.insert(0, {**ranked[0], "frame_id": str(real), "n": best_n})
     return ranked
 
 

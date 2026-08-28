@@ -14,15 +14,17 @@ router = APIRouter()
 
 @router.post("/kis", response_model=List[SearchResult])
 def search_kis(request: KisRequest):
-    return perform_kis_search(request.query, request.top_k)
+    return perform_kis_search(request.query, request.top_k,
+                              stage_b=request.stage_b)
 
 @router.post("/qa", response_model=List[QAResponse])
 def search_qa(request: QaRequest):
     return perform_qa_search(
         request.description, request.question, request.top_k,
         n_vlm_calls=request.n_vlm_calls, deadline=request.deadline,
+        stage_b=request.stage_b,
     )
 
 @router.post("/trake", response_model=List[TrakeResponse])
 def search_trake(request: TrakeRequest):
-    return perform_trake_search(request.event_queries)
+    return perform_trake_search(request.event_queries, top_k=request.top_k)

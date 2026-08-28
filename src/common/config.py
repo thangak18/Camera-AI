@@ -87,6 +87,16 @@ DEVICE = os.getenv("AIC_DEVICE", "auto")
 # rerank giữ nguyên thứ tự gốc - rerank trên dữ liệu thiếu còn hại hơn không rerank.
 RERANK_MIN_COVERAGE = float(os.getenv("AIC_RERANK_MIN_COVERAGE", 0.5))
 
+# Bật Stage B (rerank bằng Gemini, src/reranking/gemini_reranker.py) trong luồng
+# API. Stage A dùng CÙNG model/vector/query với retrieval nên đã đo được là
+# no-op (Kendall tau = 1.000, scripts/diag_rerank.py) — không có Stage B thì
+# tầng rerank hiện không đổi được dòng nào.
+#
+# Mặc định BẬT vì đêm thi không tính giờ và file nộp sinh offline. Tốn ~7-11s
+# và ~5 lượt gọi Gemini mỗi truy vấn: vòng nào BTC bấm giờ trở lại thì đặt
+# AIC_RERANK_STAGE_B=0, hoặc truyền stage_b=false trong request.
+RERANK_STAGE_B = os.getenv("AIC_RERANK_STAGE_B", "1").lower() not in ("0", "false", "no")
+
 
 def resolve_device() -> str:
     """Trả về device thực tế sẽ dùng ('cuda' hoặc 'cpu')."""

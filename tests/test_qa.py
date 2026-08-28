@@ -26,7 +26,7 @@ except ImportError:
 
 from src.vlm import qa
 from src.vlm.client import DEFAULT_ANSWER, probe_models
-from src.vlm.qa import answer_qa, collect_ns
+from src.vlm.qa import answer_qa, collect_ns, reorder_by_frame
 
 GT_VIDEO = "L22_V008"
 GT_QUESTION = (
@@ -125,6 +125,39 @@ def test_frame_pick() -> None:
         qa.VLM_BACKEND = real_backend
 
 
+def test_frame_insert_is_real_frame_idx() -> None:
+    """Dòng chèn thêm phải mang frame_idx THẬT, không phải `n` zero-pad.
+
+    Đây là lỗi đã xảy ra thật: `reorder_by_frame` chèn `f"{best_n:03d}"` trong
+    khi `scripts/generate_submission.py` ghi thẳng frame_id ra CSV không convert
+    (payload Qdrant đã là frame_idx thật). Dòng chèn nằm ở ĐẦU nhóm nên chiếm
+    đúng chỗ dễ ăn R@1 nhất bằng một frame không tồn tại trong map_keyframes.
+    """
+    print("\n[9] dòng chèn dùng frame_idx thật")
+    real = qa.try_real_frame_idx
+    # frame_idx thật, KHÔNG phải n — đúng như payload Qdrant trả về.
+    cs = [{"video_id": "L22_V008", "frame_id": "1500", "n": 10, "score": 0.9},
+          {"video_id": "L22_V008", "frame_id": "1650", "n": 11, "score": 0.8}]
+    try:
+        qa.try_real_frame_idx = lambda vid, n: {10: 1500, 11: 1650, 12: 1800}.get(int(n))
+
+        rows = reorder_by_frame(cs, 12)          # 12 không phải candidate -> chèn
+        check("có chèn thêm dòng", len(rows) == len(cs) + 1, f"{len(rows)}")
+        check("dòng chèn mang frame_idx thật", rows[0]["frame_id"] == "1800",
+              rows[0]["frame_id"])
+        check("dòng chèn giữ n để tầng sau còn mở được ảnh", rows[0]["n"] == 12)
+
+        rows = reorder_by_frame(cs, 11)          # 11 đã là candidate -> không chèn
+        check("best_n trùng candidate → không chèn", len(rows) == len(cs))
+        check("candidate trùng leo lên đầu", rows[0]["frame_id"] == "1650",
+              rows[0]["frame_id"])
+
+        rows = reorder_by_frame(cs, 99)          # tra trượt map -> thà bỏ còn hơn sai
+        check("tra trượt map_keyframes → không chèn dòng sai", len(rows) == len(cs))
+    finally:
+        qa.try_real_frame_idx = real
+
+
 def test_degradation() -> None:
     print("\n[2] chịu lỗi")
     check("candidates rỗng → []", answer_qa("hỏi gì đó", []) == [])
@@ -214,6 +247,7 @@ def main() -> None:
     test_frame_pick()
     test_timeout_budget()
     test_many_groups()  # Test logic thuần không tốn API, chạy tốt offline
+    test_frame_insert_is_real_frame_idx()
 
     if args.offline:
         print("\n(bỏ qua phần gọi mạng)")
