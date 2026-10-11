@@ -29,6 +29,8 @@ _passed = 0
 _failed = 0
 
 OVERLOAD = "503 UNAVAILABLE. This model is currently experiencing high demand"
+DENIED = ("403 PERMISSION_DENIED. {'error': {'code': 403, 'message': "
+          "'Your project has been denied access. Please contact support.'")
 
 
 def check(name: str, cond: bool, detail: str = "") -> None:
@@ -118,6 +120,114 @@ def test_503_thu_lai_cung_model() -> None:
           n_dau == GEMINI_RETRY_ON_503, f"{n_dau} lan")
     check("het luot moi fallback sang model khac",
           len(set(rec.calls)) == 2, str(set(rec.calls)))
+    reset()
+
+
+def test_403_doi_key() -> None:
+    print("\n[12] 403 doi KEY, khong nhay model")
+    reset()
+    # Ngay 04/09: key so 1 bi cam o cap project ("denied access"). 403 roi vao
+    # nhanh Exception chung -> break -> thu model ke tiep bang DUNG cai key da
+    # chet, du 5 model la het deadline ma chua tung cham toi key con song.
+    client._keys = ["key-mot", "key-hai"]
+    client._key_idx = 0
+    client._dead_keys.clear()
+    client._cooldown_until.clear()
+    client._active_models = list(GEMINI_MODELS[:2])
+    client._active_models_at = time.monotonic()
+
+    def behaviour(model, n):
+        return Exception(DENIED) if client._key_idx == 0 else "xong"
+
+    with patched(behaviour) as rec:
+        out = client.call_gemini("hoi gi do", timeout_s=30.0,
+                                 deadline=time.monotonic() + 30.0)
+
+    check("doi key roi tra ve ket qua that", out == "xong", repr(out))
+    check("key bi cam bi danh dau chet", 0 in client._dead_keys,
+          str(client._dead_keys))
+    check("403 khong lam nhay sang model khac",
+          len(set(rec.calls)) == 1, str(rec.calls))
+
+    client._keys = []
+    client._key_idx = 0
+    client._dead_keys.clear()
+    client._cooldown_until.clear()
+    reset()
+
+
+def test_403_moi_key_deu_cam() -> None:
+    print("\n[13] moi key deu 403 -> dung han, khong quet het danh sach model")
+    reset()
+    client._keys = ["key-mot", "key-hai"]
+    client._key_idx = 0
+    client._dead_keys.clear()
+    client._cooldown_until.clear()
+    client._active_models = list(GEMINI_MODELS[:5])
+    client._active_models_at = time.monotonic()
+
+    with patched(lambda m, n: Exception(DENIED)) as rec:
+        out = client.call_gemini("hoi gi do", timeout_s=30.0,
+                                 deadline=time.monotonic() + 30.0)
+
+    check("tra ve chuoi rong", out == "", repr(out))
+    check("dung sau khi thu het key, khong quet 5 model",
+          len(rec.calls) == 2, str(rec.calls))
+
+    client._keys = []
+    client._key_idx = 0
+    client._dead_keys.clear()
+    client._cooldown_until.clear()
+    reset()
+
+
+def test_probe_403_doi_key() -> None:
+    print("\n[14] probe gap loi cap key thi doi key, khong gach het model")
+    reset()
+    client._keys = ["key-mot", "key-hai"]
+    client._key_idx = 0
+    client._dead_keys.clear()
+    client._cooldown_until.clear()
+
+    def behaviour(model, n):
+        return Exception(DENIED) if client._key_idx == 0 else "pong"
+
+    with patched(behaviour):
+        alive = client.probe_models(list(GEMINI_MODELS[:2]))
+
+    check("do ra du model sau khi doi key",
+          alive == list(GEMINI_MODELS[:2]), str(alive))
+    check("key bi cam bi danh dau chet", 0 in client._dead_keys,
+          str(client._dead_keys))
+
+    client._keys = []
+    client._key_idx = 0
+    client._dead_keys.clear()
+    client._cooldown_until.clear()
+    reset()
+
+
+def test_probe_403_moi_key_deu_chet() -> None:
+    print("\n[15] probe: moi key deu hong -> dung, khong ket vong lap")
+    reset()
+    client._keys = ["key-mot", "key-hai"]
+    client._key_idx = 0
+    client._dead_keys.clear()
+    client._cooldown_until.clear()
+
+    with patched(lambda m, n: Exception(DENIED)) as rec:
+        alive = client.probe_models(list(GEMINI_MODELS[:2]))
+
+    check("khong do ra model nao", alive == [], str(alive))
+    # Model dau an het 2 key roi probe dung han: khong dot PROBE_TIMEOUT cho
+    # cac model con lai. Neu vong `while` khong dung, test nay treo han.
+    check("dung ngay khi het key, khong quet not model con lai",
+          len(rec.calls) == 2, str(len(rec.calls)))
+
+    client._keys = []
+    client._key_idx = 0
+    client._dead_keys.clear()
+    client._cooldown_until.clear()
     reset()
 
 
@@ -298,6 +408,10 @@ def main() -> int:
 
     test_deadline()
     test_503_thu_lai_cung_model()
+    test_403_doi_key()
+    test_403_moi_key_deu_cam()
+    test_probe_403_doi_key()
+    test_probe_403_moi_key_deu_chet()
     test_breaker_mo()
     test_breaker_dong_lai()
     test_probe_rong()

@@ -29,6 +29,11 @@ import re
 import sys
 import zipfile
 from collections import Counter
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from src.trake.query_parser import count_events
 
 VIDEO_RE = re.compile(r"^[A-Z]\d+_V\d+$")
 MAX_ROWS = 100
@@ -60,13 +65,14 @@ def load_valid_frames(map_dir: str, video_id: str, cache: dict) -> set[str] | No
 
 
 def expected_events(query_dir: str, basename: str) -> int | None:
-    """Số event yêu cầu = số DÒNG KHÔNG RỖNG trong file đề.
+    """Số cột frame mà file TRAKE này phải có.
 
-    Đếm theo dòng chứ không theo nhãn 'E<số>': log chấm của BTC ở đợt 1 báo
-    query-p1-16-trake "Expected 4 frame IDs, got 3" trong khi file chỉ có nhãn
-    E1..E3 — dòng mô tả cảnh mở đầu (không nhãn) cũng được tính là 1 event.
-    Đếm theo nhãn còn hỏng ở ca đánh nhầm nhãn (query-p1-18 đợt thử nghiệm ghi
-    E2 hai lần, không có E3).
+    Dùng CHUNG `src/trake/query_parser.py` với `generate_submission.py`. Trước
+    đây mỗi script tự đếm một kiểu (ở đây: số dòng không rỗng), nên validator
+    không thể phát hiện chính lỗi tách phân cảnh — nó chỉ xác nhận lại cùng
+    một giả định sai. Đề Đợt 2 (query-p2-8, query-p2-21) có dòng dẫn nhập tự
+    khai "4 cảnh" rồi mới tới 4 dòng nhãn: đếm theo dòng ra 5, cả hai script
+    cùng ra 5, và không có gì chặn lại.
     """
     if not query_dir:
         return None
@@ -74,7 +80,7 @@ def expected_events(query_dir: str, basename: str) -> int | None:
     if not os.path.exists(path):
         return None
     with open(path, encoding="utf-8") as fh:
-        return sum(1 for line in fh if line.strip())
+        return count_events(fh.read())
 
 
 def check_file(name: str, raw: bytes, qtype: str, basename: str,

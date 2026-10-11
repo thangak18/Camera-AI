@@ -170,7 +170,7 @@ def _rescore_frames(query_vi: str, groups: OrderedDict, ordered_vids: list[str],
     """
     for vid in ordered_vids[:n_videos]:
         if deadline is not None and time.monotonic() >= deadline:
-            logger.warning("Stage B: hết ngân sách trước khi chấm lại frame — "
+            logger.warning("Stage B: hết thời gian trước khi chấm lại frame — "
                            "giữ thứ tự frame của Stage A.")
             return
         cs = groups[vid]

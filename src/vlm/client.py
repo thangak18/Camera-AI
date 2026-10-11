@@ -357,23 +357,41 @@ def probe_models(candidates: list[str] | None = None) -> list[str]:
 
     alive = []
     for m in candidates or GEMINI_MODELS:
-        try:
-            # Qua `_one_call` chứ không gọi SDK trực tiếp: cần trần thời gian
-            # (bản cũ không có, đo được 32s cho 2 model lúc Google quá tải nên
-            # khởi động API bị treo), cần giữ nhịp, và cần đếm inflight.
-            # max_output_tokens=512 chứ không phải 16: model mới dành phần lớn
-            # token đầu cho thinking, ping với trần 16 trả rỗng và bị loại oan.
-            if _one_call(m, ["ping"], PROBE_TIMEOUT):
-                alive.append(m)
-                logger.info("model OK: %s", m)
-            else:
-                # r.text rỗng KHÔNG raise, nên nhánh này từng loại model trong
-                # im lặng - không có log thì không ai biết model bị gạch tên.
-                logger.warning("model loại vì trả rỗng: %s", m)
-        except Exception as exc:
-            logger.warning(
-                "model hỏng: %s (%s: %s)", m, type(exc).__name__, str(exc)[:80]
-            )
+        if _keys and len(_dead_keys) >= len(_keys):
+            # Mọi key đã chết thì các model còn lại chắc chắn cũng hỏng theo
+            # đúng lý do đó. Thử tiếp chỉ để đốt (số model còn lại ×
+            # PROBE_TIMEOUT) giây khởi động API.
+            logger.error("Mọi key đều hỏng — dừng probe tại %s.", m)
+            break
+        # `while` chứ không phải một lần: gặp lỗi cấp key thì đổi key rồi thử
+        # LẠI CÙNG model. Không có vòng này, một key bị 403 làm cả danh sách
+        # trượt hết và API khởi động với "không model nào khả dụng" trong khi
+        # key thứ hai vẫn sống. Vòng luôn dừng: `_rotate_key` trả False khi
+        # mọi key đã bị `_mark_dead`.
+        while True:
+            try:
+                # Qua `_one_call` chứ không gọi SDK trực tiếp: cần trần thời gian
+                # (bản cũ không có, đo được 32s cho 2 model lúc Google quá tải nên
+                # khởi động API bị treo), cần giữ nhịp, và cần đếm inflight.
+                # max_output_tokens=512 chứ không phải 16: model mới dành phần lớn
+                # token đầu cho thinking, ping với trần 16 trả rỗng và bị loại oan.
+                if _one_call(m, ["ping"], PROBE_TIMEOUT):
+                    alive.append(m)
+                    logger.info("model OK: %s", m)
+                else:
+                    # r.text rỗng KHÔNG raise, nên nhánh này từng loại model trong
+                    # im lặng - không có log thì không ai biết model bị gạch tên.
+                    logger.warning("model loại vì trả rỗng: %s", m)
+                break
+            except Exception as exc:
+                if reason := _key_error_reason(str(exc)):
+                    _mark_dead(reason)
+                    if _rotate_key(f"probe: {reason}"):
+                        continue
+                logger.warning(
+                    "model hỏng: %s (%s: %s)", m, type(exc).__name__, str(exc)[:80]
+                )
+                break
 
     if not alive:
         # KHÔNG ghi đè _active_models bằng danh sách rỗng: `_models_to_try()`
@@ -454,6 +472,21 @@ def _models_to_try() -> list[str]:
     return GEMINI_MODELS
 
 
+def _key_error_reason(msg: str) -> str | None:
+    """Lỗi này thuộc về KEY/PROJECT chứ không thuộc về model? Trả lý do / None.
+
+    401 và 403 khác nhau ở nguyên nhân (key sai vs project bị đình chỉ) nhưng
+    giống hệt nhau ở cách chữa: key hiện tại vô dụng, phải đổi key. Gom vào
+    một hàm để `call_gemini` và `probe_models` không trôi lệch nhau — bản cũ
+    chỉ `call_gemini` biết 401, còn 403 thì KHÔNG chỗ nào biết.
+    """
+    if "401" in msg or "UNAUTHENTICATED" in msg:
+        return "401 UNAUTHENTICATED"
+    if "403" in msg or "PERMISSION_DENIED" in msg:
+        return "403 PERMISSION_DENIED"
+    return None
+
+
 def _is_overloaded(msg: str) -> bool:
     """503 / UNAVAILABLE / overloaded — Google quá tải, KHÔNG phải lỗi của mình."""
     low = msg.lower()
@@ -522,9 +555,12 @@ def _call_gemini_inner(prompt, images, timeout_s, max_side, remaining) -> str:
         for attempt in range(max(GEMINI_RETRY_ON_429, GEMINI_RETRY_ON_503)):
             budget = min(timeout_s, remaining())
             if budget <= 0:
-                logger.warning("hết ngân sách (%.1fs) trước khi thử %s",
-                               timeout_s, model)
-                _breaker_fail("hết ngân sách")
+                # Nói rõ "thời gian": chữ "hết ngân sách" của bản cũ đọc y hệt
+                # thông báo cạn quota/hết tiền của Google, và đã tốn một buổi
+                # debug đi tìm hoá đơn trong khi lỗi thật là deadline.
+                logger.warning("hết thời gian (deadline) trước khi thử %s — "
+                               "trần %.1fs", model, timeout_s)
+                _breaker_fail("hết thời gian")
                 return ""
             try:
                 if out := _one_call(model, contents, budget):
@@ -547,9 +583,16 @@ def _call_gemini_inner(prompt, images, timeout_s, max_side, remaining) -> str:
                 raise  # lỗi code phải nổ, không nuốt
             except Exception as exc:
                 msg = str(exc)
-                if "401" in msg or "UNAUTHENTICATED" in msg:
-                    _mark_dead("401 UNAUTHENTICATED")
-                    if not _rotate_key("key chết"):
+                if reason := _key_error_reason(msg):
+                    # Lỗi cấp KEY/PROJECT thì KHÔNG gắn với model, nên thử
+                    # model khác là vô nghĩa — chỉ đổi key mới có ích. Bản cũ
+                    # chỉ bắt 401; 403 rơi xuống nhánh chung -> `break` -> thử
+                    # model kế tiếp bằng ĐÚNG cái key đã chết. Ngày 04/09 điều
+                    # đó cho ra 4 dòng "project has been denied access" liên
+                    # tiếp rồi hết deadline, trong khi key thứ hai vẫn sống mà
+                    # chưa từng được chạm tới.
+                    _mark_dead(reason)
+                    if not _rotate_key(reason):
                         _breaker_fail("hết key")
                         return ""
                     continue

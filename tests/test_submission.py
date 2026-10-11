@@ -173,13 +173,97 @@ def test_mot_truy_van_hong() -> None:
 
 
 def test_parse_events() -> None:
-    print("\n[6] TRAKE: moi dong khong rong la mot su kien")
+    print("\n[6] TRAKE: tach dung so phan canh")
+
+    # Ca da duoc BTC xac nhan o Dot 1 (queries-1/query-p1-16): dong mo dau
+    # KHONG nhan, mo ta mot khoanh khac that -> van la mot event.
     ev = gs.parse_events("canh mo dau\nE1 nguoi chay\nE2: ve dich\n\n")
-    check("dem du 3 su kien (ke ca dong khong co nhan E)",
+    check("dong mo dau khong nhan van duoc tinh la event",
           len(ev) == 3, str(ev))
-    check("da bo tien to nhan", ev[1] == "nguoi chay" and ev[2] == "ve dich",
+    check("da bo tien to nhan E", ev[1] == "nguoi chay" and ev[2] == "ve dich",
           str(ev))
     check("giu nguyen dong mo dau", ev[0] == "canh mo dau", str(ev))
+
+    # De Dot 2 kieu query-p2-8: loi dan TU KHAI so phan canh -> bo loi dan.
+    ev = gs.parse_events(
+        "Video ve mot khu vuon. Day la chuoi lien tiep cac canh quay ve "
+        "4 loai trai cay trong vuon.\n"
+        "E1: Canh dau tien co trai sau rieng.\n"
+        "E2: Canh dau tien co trai mang cut.\n"
+        "E3: Canh dau tien co trai buoi.\n"
+        "E4: Canh dau tien co trai dau bon bon.\n")
+    check("de tu khai '4 loai' + 4 dong nhan -> 4 phan canh, khong phai 5",
+          len(ev) == 4, str(ev))
+    check("loi dan bi loai khoi danh sach event",
+          not any("khu vuon" in e for e in ev), str(ev))
+
+    # De Dot 2 kieu query-p2-21: nhan 'Canh <so>:' chu khong phai 'E<so>'.
+    ev = gs.parse_events(
+        "4 canh nay xay ra lien tiep nhau.\n"
+        "Canh 1: Hai nguoi phu nu dan niem phong mot thung carton.\n"
+        "Canh 2: Cac thung mi tom duoc sap xep ngay ngan.\n"
+        "Canh 3: Mot nguoi dan ong nhac thung mi tom len.\n"
+        "Canh 4: Canh quay can canh cac thung mi tren xe tai.\n")
+    check("nhan 'Canh <so>:' duoc dem dung -> 4 phan canh", len(ev) == 4, str(ev))
+    check("da bo tien to 'Canh 1:' khoi cau truy van",
+          ev[0] == "Hai nguoi phu nu dan niem phong mot thung carton.", str(ev))
+    check("'Canh quay can canh' KHONG bi nham la nhan (khong co so)",
+          ev[3] == "Canh quay can canh cac thung mi tren xe tai.", str(ev))
+
+    # Loi dan ket thuc bang ':' -> loi dan, du khong khai so.
+    ev = gs.parse_events(
+        "Doan video mua lan, tim cac su kien sau:\n"
+        "E1: Lan quay vong.\n"
+        "E2: Bon chan cham dat.\n")
+    check("dong ket thuc bang ':' bi loai", len(ev) == 2, str(ev))
+
+    # Nhan danh sai (query-p1-18 ghi E2 hai lan, khong co E3) van dem du 4.
+    ev = gs.parse_events(
+        "Trong doan video nau an, gom cac khoanh khac so che:\n"
+        "E1: Cat nam.\nE2: Cat cu nang.\nE2: Cat dau hu.\nE4: Bat lua.\n")
+    check("danh nham nhan E2 hai lan van dem du 4", len(ev) == 4, str(ev))
+
+    # De Dot 3 kieu queries-3/query-p2-21: dong dau chi neu CHU DE ca video,
+    # KHONG khai so, KHONG ket thuc bang ':', KHONG co cum dan nhap -- luat
+    # Dot 2 dem ra 5. Nhan chay du E1..E4 la bang chung BTC da tu dem du 4.
+    ev = gs.parse_events(
+        "Mot mon an lam tu tom va cac loai gia vi.\n"
+        "E1: Nguoi dau bep tron hon hop nuoc xot.\n"
+        "E2: Nguoi dau bep cat bo dau tom.\n"
+        "E3: Con tom cham vao dia.\n"
+        "E4: Tep cam duoc xep len dia.\n")
+    check("dong chu de khong co moc thoi diem -> 4 phan canh, khong phai 5",
+          len(ev) == 4, str(ev))
+    check("dong chu de bi loai khoi danh sach event",
+          not any("gia vi" in e for e in ev), str(ev))
+
+    # Kieu queries-3/query-p2-34: giong tren, them dong trong ngan cach.
+    ev = gs.parse_events(
+        "Con lan mau do dang bieu dien tren cac cot tru.\n\n"
+        "E1: Con lan treo hai chan truoc vao than tru.\n"
+        "E2: Con lan dung thang tren hai tru.\n"
+        "E3: Con lan ngoanh mat huong nguoc lai.\n"
+        "E4: Con lan ngam mot thanh tru.\n")
+    check("dong chu de tach boi dong trong -> 4 phan canh", len(ev) == 4, str(ev))
+    check("phan canh dau la E1 chu khong phai dong chu de",
+          ev[0] == "Con lan treo hai chan truoc vao than tru.", str(ev))
+
+    # Nhung ca BTC da xac nhan o Dot 1 KHONG duoc doi: dong khong nhan CO moc
+    # thoi diem ("bat dau bang") van la event, du nhan chay du E1..E3.
+    ev = gs.parse_events(
+        "Doan video bat dau bang anh can dau mot con lan trang.\n"
+        "E1 Hai con rong vang xoay vong.\n"
+        "E2 Lan hoan tat cu xoay tren thanh tru.\n"
+        "E3 Dui cham vao keng dong.\n")
+    check("dong khong nhan co moc 'bat dau bang' van la event",
+          len(ev) == 4 and ev[0].startswith("Doan video"), str(ev))
+
+    # generate_submission va validate_submission phai dem GIONG NHAU.
+    from src.trake.query_parser import count_events
+    text = ("4 canh nay xay ra lien tiep nhau.\n"
+            "Canh 1: a\nCanh 2: b\nCanh 3: c\nCanh 4: d\n")
+    check("validator dem trung voi bo sinh bai nop",
+          count_events(text) == len(gs.parse_events(text)), "lech nhau")
 
 
 def main() -> int:

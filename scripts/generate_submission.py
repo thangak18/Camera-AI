@@ -31,7 +31,6 @@ import argparse
 import csv
 import json
 import os
-import re
 import shutil
 import sys
 import time
@@ -39,6 +38,8 @@ import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from src.trake.query_parser import TrakeQuery, parse_trake_query
 
 # Nap .env TRUOC khi import bat cu thu gi doc config: `client._load_keys()` va
 # `translator` deu doc GEMINI_API_KEY luc goi, nhung `probe_models` chay som.
@@ -151,26 +152,31 @@ def parse_query_file(file_path: str):
         return content
 
 
-def parse_events(query_data) -> list:
-    """Tách file TRAKE thành danh sách sự kiện.
+def split_trake(query_data) -> TrakeQuery:
+    """Tách file TRAKE thành các phân cảnh. Quy tắc đầy đủ ở
+    `src/trake/query_parser.py`.
 
-    MỖI DÒNG KHÔNG RỖNG LÀ MỘT EVENT — kể cả dòng mở đầu không có nhãn "E<số>".
-    Log chấm của BTC ở Đợt 1 báo query-p1-16-trake "Expected 4 frame IDs, got
-    3": file đề có 4 dòng (1 dòng mô tả cảnh mở đầu + E1..E3), BTC đếm đủ 4.
-    Lọc theo nhãn E<số> sẽ thiếu đúng 1 cột nên cả file bị loại khỏi vòng chấm.
-    Nhãn có thể có ":" (đề thử nghiệm) hoặc không (Đợt 1) — bỏ tiền tố đi
-    trước khi đưa vào search, giữ nguyên phần mô tả.
+    Luật cũ ("mỗi dòng không rỗng là một event") sai trên đề Đợt 2: cả
+    query-p2-8 lẫn query-p2-21 mở đầu bằng một dòng dẫn nhập TỰ KHAI số phân
+    cảnh ("4 loại trái cây", "4 cảnh này xảy ra liên tiếp nhau") rồi mới tới 4
+    dòng có nhãn — đếm theo dòng ra 5 cột. Lệch số cột là mất trắng cả file:
+    log chấm Đợt 1 đã loại query-p1-16-trake với đúng lý do đó ("Expected 4
+    frame IDs, got 3"). Thêm nữa query-p2-21 dùng nhãn "Cảnh <số>:" mà regex cũ
+    chỉ biết "E<số>", nên chuỗi "Cảnh 1:" đi thẳng vào câu truy vấn SigLIP.
+
+    Ca đã được BTC xác nhận ở Đợt 1 vẫn giữ nguyên: queries-1/query-p1-16 có
+    dòng mở đầu KHÔNG nhãn mô tả một khoảnh khắc thật, không có dấu hiệu lời
+    dẫn nào, nên vẫn được tính là event.
     """
     if not isinstance(query_data, str):
-        return query_data.get("event_queries", [])
-    out = []
-    for line in query_data.split("\n"):
-        line = line.strip()
-        if not line:
-            continue
-        m = re.match(r"^E\d+\s*[:.)-]?\s+(.*)", line)
-        out.append(m.group(1).strip() if m else line)
-    return out
+        return TrakeQuery(events=list(query_data.get("event_queries", [])),
+                          context=[])
+    return parse_trake_query(query_data)
+
+
+def parse_events(query_data) -> list:
+    """Chỉ danh sách phân cảnh, đã bỏ lời dẫn. Giữ tên cũ cho chỗ gọi cũ."""
+    return split_trake(query_data).events
 
 
 # ==========================================================================
@@ -193,7 +199,21 @@ def solve(q_type: str, query_data, backend):
         return backend.qa(description, question, MAX_ROWS), notes
 
     if q_type == "trake":
-        events = parse_events(query_data)
+        parsed = split_trake(query_data)
+        events = parsed.events
+        # In ra cách tách để soi bằng mắt TRƯỚC khi tốn hàng chục phút chạy.
+        # Sai số phân cảnh = sai số cột = mất trắng file, mà nhìn CSV xong thì
+        # đã muộn: thể lệ chỉ cho nộp 3 lần/gói.
+        print(f"    {len(events)} phan canh"
+              + (f" (bo {len(parsed.context)} dong dan nhap)"
+                 if parsed.context else ""))
+        for i, event in enumerate(events, 1):
+            print(f"      E{i}: {event[:88]}")
+        # In luôn NỘI DUNG dòng bị bỏ, không chỉ số lượng. Dòng dẫn Đợt 3 hay
+        # chứa manh mối phân biệt video ("con lân màu ĐỎ") mà không sự kiện nào
+        # nhắc lại; thấy nó ở đây thì còn kịp gộp tay vào E1 trước khi chạy.
+        for line in parsed.context:
+            print(f"      [loi dan, khong tim] {line[:70]}")
         rows = backend.trake(events, MAX_ROWS)
         if not rows and events:
             # Solver TRAKE đòi 1 video có mặt trong top-100 của TẤT CẢ sự kiện;

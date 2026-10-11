@@ -193,12 +193,35 @@ PROBE_TIMEOUT = float(os.getenv("AIC_PROBE_TIMEOUT", 10.0))
 #   flash đầu -> 15.2s, "Đèo Tả Pứa" (3.7-flash timeout 10s ba lần liên tiếp)
 # Model mới dành phần lớn thời gian cho thinking - hợp bài toán suy luận, không
 # hợp việc đọc một dòng chữ trên ảnh. Giữ flash làm dự phòng khi lite chết.
+#
+# 04/09: "lite trước" vẫn đúng, nhưng ĐÚNG CÁI LITE NÀO thì đã đổi. Đo trực
+# tiếp bằng cả hai key còn sống, một prompt "say OK":
+#
+#                              key ...Tqj2Nw   key ...5hZROw
+#   gemini-3.5-flash-lite      timeout 25s     503  8.2s
+#   gemini-flash-lite-latest   503  0.7s       timeout 25s
+#   gemini-3.1-flash-lite      OK   5.6s       OK   1.0s
+#   gemini-3.5-flash           OK  19.3s       OK  16.9s
+#   gemini-3.7-flash           OK   1.6s       OK   3.1s
+#   gemini-3.6-flash           timeout 25s     OK   1.6s
+#
+# Hai model đứng ĐẦU danh sách cũ là đúng hai model đang chết, nên với
+# VLM_CALL_TIMEOUT 2.5s (live) thì model #1 timeout là hết sạch deadline và
+# không lệnh nào chạm tới cái trả lời trong 1.6s. Đây là nửa còn lại của vụ
+# "hết ngân sách" ngày 04/09 (nửa kia: 403 không đổi key, xem vlm/client.py).
+#
+# `gemini-flash-lite-latest` bị BỎ HẲN: nó là alias của 3.5-flash-lite (hỏng
+# cùng lúc, cùng kiểu), giữ cả hai chỉ là đặt cùng một canh bạc hai lần.
+#
+# 3.5-flash-lite vẫn ở lại nhưng xuống hạng hai: 503 là trạng thái nhất thời,
+# `probe_models()` sẽ tự dùng lại khi Google hồi.
+# 3.5-flash 17-19s thì chỉ có nghĩa ở profile offline, để cuối.
 GEMINI_MODELS = [
-    "models/gemini-3.5-flash-lite",
-    "models/gemini-flash-lite-latest",
     "models/gemini-3.1-flash-lite",
-    "models/gemini-3.5-flash",
+    "models/gemini-3.5-flash-lite",
     "models/gemini-3.7-flash",
+    "models/gemini-3.6-flash",
+    "models/gemini-3.5-flash",
 ]
 
 # Cạnh dài tối đa khi nén ảnh gửi Gemini (Q&A). Rerank dùng số riêng, nhỏ hơn
