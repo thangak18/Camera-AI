@@ -225,17 +225,73 @@ python scripts/01_ingest.py
 
 ### Bước 4: Chạy Backend (FastAPI)
 ```bash
-uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8000
+uvicorn backend.app.main:app --reload --host 0.0.0.0 --port 8000
 ```
-> Chưa triển khai — xem checklist ở mục 8. Kiểm tra Swagger UI tại [http://localhost:8000/docs](http://localhost:8000/docs) khi đã có.
+> Chỉ cần cho **web UI** và **vòng thi trực tiếp**. Sinh bài nộp KHÔNG cần bước
+> này — xem Bước 6. Swagger UI tại [http://localhost:8000/docs](http://localhost:8000/docs).
 
 ### Bước 5: Chạy Frontend (React)
+
+URL backend đọc từ biến môi trường, **không sửa code**. Tạo `frontend/.env.local`
+(đã nằm trong `.gitignore`):
+
+```
+VITE_API_BASE_URL=https://thick-yaks-unite.loca.lt
+```
+
+Rồi:
 ```bash
 cd frontend
 npm install
-VITE_API_BASE_URL=http://localhost:8000 npm run dev
+npm run dev
 ```
-> Thư mục `frontend/` chưa được dựng lại sau khi tái cấu trúc — xem checklist ở mục 8.
+
+> Bỏ trống hoặc không tạo file thì mặc định là `http://localhost:8000`.
+> Localtunnel đổi tên mỗi lần Kaggle khởi động lại — sửa đúng một dòng trong
+> `.env.local` rồi `npm run dev` lại, không phải đụng vào `App.jsx`.
+
+### Bước 6: Sinh bài nộp (đêm thi)
+
+Chạy **ngay trên máy có dữ liệu**, không qua API, không qua localtunnel, không
+cần commit/push gì trước.
+
+```bash
+cp .env.example .env          # rồi điền GEMINI_API_KEY
+python scripts/preflight.py   # kiểm điều kiện — chạy TRƯỚC khi đề về
+
+# đề về:
+python scripts/generate_submission.py --query_dir <thư-mục-đề>
+python scripts/validate_submission.py --zip submission.zip --query_dir <thư-mục-đề> --map_dir data/v1/map_keyframes
+```
+
+Cả hai script trả **exit code khác 0** khi còn vấn đề. Chi tiết từng truy vấn
+nằm ở `outputs/submission_report.json`: số dòng, số video, thời gian, trạng
+thái circuit breaker, và mọi dấu hiệu suy giảm.
+
+**Thứ tự đọc khi có cảnh báo:** `[X]` là file hỏng/thiếu — phải sửa. `[!]` là
+file vẫn ghi được nhưng suy giảm (thiếu dòng, Q&A toàn `khong ro`, TRAKE lặp
+một frame). Thể lệ chỉ cho nộp 3 lần mỗi gói và lấy điểm lần **cuối**, nên
+không được "nộp thử xem sao".
+
+**Điều kiện cần** (`preflight.py` kiểm đủ): `data/v1/{keyframes,map_keyframes,
+siglip_features}` đầy đủ · mạng tới Qdrant Cloud · `GEMINI_API_KEY` trong
+`.env`. Elasticsearch là tuỳ chọn — không có thì searcher tự bỏ nhánh keyword.
+GPU cũng không bắt buộc: đo trên CPU được 0,28s/truy vấn cho khâu SigLIP.
+
+**Công tắc nhanh khi có sự cố** — đặt trong `.env`, không phải sửa code:
+
+| Tình huống | Đặt |
+|---|---|
+| Gemini 503 hàng loạt, muốn chạy nhanh | `AIC_RERANK_STAGE_B=0` |
+| Vòng thi trực tiếp bị bấm giờ | `AIC_PROFILE=live` (đổi cả bộ ngân sách + tắt Stage B) |
+| Chạy qua localtunnel, Dạng 2 bị ngắt | `AIC_QA_DEADLINE=90` |
+
+> **Chỉ có một đường sinh bài nộp.** `scripts/deploy_kaggle.ipynb` cố ý KHÔNG
+> có cell sinh submission: hai đường song song sẽ cho ra hai `submission.zip`
+> từ hai thời điểm, có thể từ hai phiên bản code khác nhau, và không phân biệt
+> được lúc đang vội. Notebook đó giờ chỉ để dựng API cho web UI / vòng thi
+> trực tiếp. Nếu máy local thật sự hỏng, notebook có hướng dẫn chạy **đúng
+> script này** trên Kaggle — cùng code, không có nhánh riêng nào để lệch pha.
 
 ---
 

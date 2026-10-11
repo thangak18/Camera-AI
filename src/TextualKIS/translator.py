@@ -3,6 +3,8 @@ import logging
 import os
 from functools import lru_cache
 
+from src.common.config import TRANSLATE_DEADLINE
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -91,7 +93,12 @@ def translate_vi_to_en(text_vi: str) -> str:
             from src.vlm.client import call_gemini
 
             prompt = _GEMINI_TRANSLATE_PROMPT.format(text_vi=text_vi)
-            result = call_gemini(prompt).strip()
+            # Ngân sách NGẮN có chủ đích. Khâu này nằm trước retrieval trên MỌI
+            # truy vấn KIS/QA, và ngay bên dưới đã có deep-translator làm lưới
+            # đỡ — chờ Gemini lâu ở đây là lỗ thuần. Bản cũ để nó dùng chung
+            # trần 25s/model nên khi Google 503 nó ăn tới 75s trước khi
+            # retrieval kịp bắt đầu.
+            result = call_gemini(prompt, timeout_s=TRANSLATE_DEADLINE).strip()
             if result:
                 logger.debug("Gemini translate: '%s' → '%s'", text_vi[:60], result[:60])
                 return result

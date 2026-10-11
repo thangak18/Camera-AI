@@ -2,6 +2,7 @@ from collections.abc import Iterable
 from typing import List
 import sys
 import os
+import time
 
 # Ensure we can import from src
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../"))
@@ -10,7 +11,7 @@ from src.trake.solver import solve_trake
 from src.common.frame_utils import all_frame_idx
 from src.TextualKIS.searcher import TextualKISSearcher
 from src.reranking import rerank, gemini_rerank
-from src.common.config import RERANK_STAGE_B
+from src.common.config import RERANK_STAGE_B, STAGE_B_DEADLINE
 from src.vlm import answer_qa
 
 # Khởi tạo searcher 1 lần (Global Singleton) để không tạo lại connection Qdrant/ES liên tục
@@ -77,10 +78,16 @@ def _apply_stage_b(query_vi: str, ranked: List[dict], top_k: int,
 
     `gemini_rerank` không bao giờ raise và giữ nguyên số phần tử; mọi đường lỗi
     trả về đúng thứ tự Stage A, nên ở đây không cần try/except riêng.
+
+    Ngân sách là TRẦN CỨNG của cả tầng: endpoint không được phép chạy lâu hơn
+    thứ mà phía gọi chịu đựng được. Đo ngày 28/08: khi Gemini 503, Stage B
+    không trần đã kéo một truy vấn KIS lên ~2 phút, localtunnel ngắt ở giữa và
+    kết quả server vừa tính xong bị vứt đi.
     """
     if not (RERANK_STAGE_B if stage_b is None else stage_b):
         return ranked
-    return gemini_rerank(query_vi, ranked)[:top_k]
+    return gemini_rerank(query_vi, ranked,
+                         deadline=time.monotonic() + STAGE_B_DEADLINE)[:top_k]
 
 
 def perform_kis_search(query: str, top_k: int,
