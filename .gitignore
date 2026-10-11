@@ -33,3 +33,5 @@ outputs/**
 
 # Qdrant local data dir (created when running `docker run ... qdrant/qdrant`)
 qdrant_storage/
+
+docs/**
